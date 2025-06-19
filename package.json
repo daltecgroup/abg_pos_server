@@ -1,0 +1,22 @@
+{
+  "name": "abg_pos_server",
+  "version": "1.0.0",
+  "description": "Server for ABG POS App",
+  "license": "ISC",
+  "author": "Alpha Sigma Digital",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server",
+    "dev": "node --watch --env-file=.env server"
+  },
+  "dependencies": {
+    "bcrypt": "^6.0.0",
+    "colors": "^1.4.0",
+    "cors": "^2.8.5",
+    "express": "^5.1.0",
+    "jsonwebtoken": "^9.0.2",
+    "mongoose": "^8.16.0",
+    "socket.io": "^4.8.1"
+  }
+}
