@@ -19,7 +19,6 @@ const UserSchema = new Schema({
         {
             type: String,
             enum: Object.values(Roles),
-            default: Roles.operator
         }
     ],
     password: {

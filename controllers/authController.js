@@ -66,12 +66,12 @@ export const authUser = async (req, res) => {
         
         // check if user is deleted
         if((user && user.isDeleted) || !user){
-            res.status(410).json({ message: 'User has been deleted' });
+            return res.status(410).json({ message: 'User has been deleted' });
         }
 
         // check if user is innactive
         if(user && !user.isActive){
-            res.status(404).json({ message: 'User is deactivated' });
+            return res.status(404).json({ message: 'User is deactivated' });
         }
 
         // Check if user exists and password matches

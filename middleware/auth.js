@@ -21,6 +21,10 @@ const protect = async (req, res, next) => {
         return res.status(401).json({ message: 'Not authorized, user not found' });
       }
 
+      if(req.user.isDeleted || !req.user.isActive) {
+        return res.status(401).json({ message: 'Not authorized, user not active or deleted' });
+      }
+
       next(); // Proceed to the next middleware or route handler
     } catch (error) {
       console.error('JWT verification error:', error.message);
