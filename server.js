@@ -14,6 +14,8 @@ import menuRoutes from './routes/menuRoutes.js';
 import addonRoutes from './routes/addonRoutes.js';
 import outletRoutes from './routes/outletRoutes.js';
 import orderRoutes from './routes/orderRoutes.js';
+import bundleRoutes from './routes/bundleRoutes.js';
+import attendanceRoutes from './routes/attendanceRoutes.js';
 
 const app = express();
 const server = http.createServer(app);
@@ -37,6 +39,9 @@ app.use(logger);
 // Setup Socket.IO
 // setupSocket(io);
 
+// Serve static files from the 'uploads' directory
+app.use('/uploads/attendance/evidence', express.static('uploads')); // MODIFIED: Path changed
+
 // Routes
 app.use('/api/v1/auth', authRoutes);
 app.use('/api/v1/users', userRoutes);
@@ -46,6 +51,8 @@ app.use('/api/v1/menus', menuRoutes);
 app.use('/api/v1/addons', addonRoutes);
 app.use('/api/v1/outlets', outletRoutes);
 app.use('/api/v1/orders', orderRoutes);
+app.use('/api/v1/bundles', bundleRoutes);
+app.use('/api/v1/attendances', attendanceRoutes);
 
 // Basic route for testing server status
 app.get('/api/v1', (req, res) => {
