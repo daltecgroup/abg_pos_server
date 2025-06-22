@@ -358,13 +358,13 @@ export const deleteAttendance = async (req, res) => {
     }
 
     // Optional: Check if user has ADMIN role before proceeding
-    // if (!req.user || !req.user.roles.includes(Roles.ADMIN)) {
-    //   return res.status(403).json({ message: 'Anda tidak memiliki izin untuk menghapus catatan absensi.' });
-    // }
+    if (!req.user || !req.user.roles.includes(Roles.admin)) {
+      return res.status(403).json({ message: 'Anda tidak memiliki izin untuk menghapus catatan absensi.' });
+    }
 
     const attendance = await Attendance.findByIdAndUpdate(
       id,
-      { isDeleted: true, deletedAt: new Date() /* , deletedBy: req.user.id */ },
+      { isDeleted: true, deletedAt: new Date() , deletedBy: req.user.id },
       { new: true }
     );
 

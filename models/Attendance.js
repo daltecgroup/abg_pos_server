@@ -72,6 +72,7 @@ const AttendanceSchema = new Schema({
     getters: true, // Apply getter for 'date' field
     transform: (doc, ret) => {
       delete ret.__v;
+      delete ret._id;
       return ret;
     }
   },
