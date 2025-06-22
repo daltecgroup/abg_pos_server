@@ -2,6 +2,56 @@ import User from '../models/User.js'
 import { Roles } from '../constants/roles.js'
 import { ErrorCode } from '../constants/errorCode.js';
 
+// @desc    Create a new user
+// @route   POST api/v1/users
+// @access  Private/Admin
+export const createUser = async (req, res) => {
+    try {
+        const { userId, name, roles, password } = req.body;
+
+        // Check if the user already exists
+        const existingUser = await User.findOne({ userId });
+        if (existingUser) {
+            console.log(ErrorCode.userAlreadyExist)
+            return res.status(400).json({
+                errorCode: ErrorCode.userAlreadyExist,
+                message: 'ID pengguna sudah terdaftar'
+            });
+        }
+
+        // Create a new user
+        const newUser = new User({
+            userId,
+            name,
+            roles: roles && Array.isArray(roles) ? roles : [Roles.operator],
+            password,
+        });
+
+        const invalidRoles = newUser.roles.filter(role => !Object.values(Roles).includes(role));
+        if (invalidRoles.length > 0) {
+            return res.status(400).json({ message: `Invalid role(s) provided: ${invalidRoles.join(', ')}` });
+        }
+
+        // Save the user to the database
+        const createdUser = await newUser.save();
+        const userResponse = createdUser.toObject();
+        delete userResponse.password;
+
+        console.log(`User successfully created: ${createdUser._id}`);
+
+        res.status(201).json({
+            message: 'Pengguna berhasil dibuat',
+            user: userResponse
+        });
+    } catch (error) {
+        console.log(error);
+        res.status(500).json({
+            errorCode: ErrorCode.serverError,
+            message: 'Server error', error: error.message
+        });
+    }
+};
+
 // @desc    Get all users
 // @route   GET /api/v1/users
 // @access  Private/Admin
@@ -76,56 +126,6 @@ export const syncUsers = async (req, res) => {
     }
 };
 
-// @desc    Create a new user
-// @route   POST api/v1/users
-// @access  Private/Admin
-export const createUser = async (req, res) => {
-    try {
-        const { userId, name, roles, password } = req.body;
-
-        // Check if the user already exists
-        const existingUser = await User.findOne({ userId });
-        if (existingUser) {
-            console.log(ErrorCode.userAlreadyExist)
-            return res.status(400).json({
-                errorCode: ErrorCode.userAlreadyExist,
-                message: 'ID pengguna sudah terdaftar'
-            });
-        }
-
-        // Create a new user
-        const newUser = new User({
-            userId,
-            name,
-            roles: roles && Array.isArray(roles) ? roles : [Roles.operator],
-            password,
-        });
-
-        const invalidRoles = newUser.roles.filter(role => !Object.values(Roles).includes(role));
-        if (invalidRoles.length > 0) {
-            return res.status(400).json({ message: `Invalid role(s) provided: ${invalidRoles.join(', ')}` });
-        }
-
-        // Save the user to the database
-        const createdUser = await newUser.save();
-        const userResponse = createdUser.toObject();
-        delete userResponse.password;
-
-        console.log(`User successfully created: ${createdUser._id}`);
-
-        res.status(201).json({
-            message: 'Pengguna berhasil dibuat',
-            user: userResponse
-        });
-    } catch (error) {
-        console.log(error);
-        res.status(500).json({
-            errorCode: ErrorCode.serverError,
-            message: 'Server error', error: error.message
-        });
-    }
-};
-
 // @desc    Get user by ID
 // @route   GET /api/users/:id
 // @access  Private
@@ -191,7 +191,7 @@ export const softDeleteUserById = async (req, res) => {
         if(req.user._id == req.params.id) {
             return res.status(404).json({ message: 'Tidak dapat menghapus akun sendiri' });
         }
-        
+
         const deletedUser = await User.findOneAndUpdate(
             { _id: req.params.id },
             { isActive: false, isDeleted: true, deletedAt: Date.now(), deletedBy: req.user._id },

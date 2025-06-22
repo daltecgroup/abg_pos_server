@@ -8,6 +8,12 @@ import connectDB from './config/db.js';
 // import custom modules
 import authRoutes from './routes/authRoutes.js';
 import userRoutes from './routes/userRoutes.js';
+import ingredientRoutes from './routes/ingredientRoutes.js';
+import menuCategoryRoutes from './routes/menuCategoryRoutes.js';
+import menuRoutes from './routes/menuRoutes.js';
+import addonRoutes from './routes/addonRoutes.js';
+import outletRoutes from './routes/outletRoutes.js';
+import orderRoutes from './routes/orderRoutes.js';
 
 const app = express();
 const server = http.createServer(app);
@@ -34,6 +40,12 @@ app.use(logger);
 // Routes
 app.use('/api/v1/auth', authRoutes);
 app.use('/api/v1/users', userRoutes);
+app.use('/api/v1/ingredients', ingredientRoutes);
+app.use('/api/v1/menucategories', menuCategoryRoutes);
+app.use('/api/v1/menus', menuRoutes);
+app.use('/api/v1/addons', addonRoutes);
+app.use('/api/v1/outlets', outletRoutes);
+app.use('/api/v1/orders', orderRoutes);
 
 // Basic route for testing server status
 app.get('/api/v1', (req, res) => {

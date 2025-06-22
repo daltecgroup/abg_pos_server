@@ -2,44 +2,57 @@ import { Schema, model } from 'mongoose';
 import { Roles } from '../constants/roles.js';
 import bcrypt from 'bcrypt';
 
+const hashPasword = async (password) => {
+    const salt = await bcrypt.genSalt(10);
+    return await bcrypt.hash(password, salt);
+}
+
 const UserSchema = new Schema({
     userId: {
         type: String,
         required: true,
         unique: true,
         trim: true,
-        lowercase: true
+        lowercase: true,
+        index: true
     },
     name: {
         type: String,
         required: true,
-        trim: true
+        trim: true,
+        index: true
     },
     roles: [
         {
             type: String,
             enum: Object.values(Roles),
+            required: true,
         }
     ],
     password: {
         type: String,
-        required: true
+        required: true,
+        minLength: 4,
     },
     imgUrl: {
         type: String,
         default: null,
+        trim: true,
     },
     phone: {
         type: String,
-        default: null
+        default: null,
+        trim: true,
     },
     isActive: {
         type: Boolean,
-        default: true
+        default: true,
+        index: true
     },
     isDeleted: {
         type: Boolean,
-        default: false
+        default: false,
+        index: true
     },
     deletedAt: {
         type: Date,
@@ -52,11 +65,6 @@ const UserSchema = new Schema({
 }, {
     timestamps: true
 });
-
-const hashPasword = async (password) => {
-    const salt = await bcrypt.genSalt(10);
-    return await bcrypt.hash(password, salt);
-}
 
 // Pre-save hook to hash password before saving
 UserSchema.pre('save', async function(next) {
@@ -74,6 +82,12 @@ UserSchema.pre('findOneAndUpdate', async function(next) {
   }
   if (update.password) {
     update.password = await hashPasword(update.password);
+  }
+  // Handle soft delete logic during update
+  if (update && update.isDeleted === true) {
+    if (!update.deletedAt) {
+      update.deletedAt = new Date(); // Set deletion timestamp
+    }
   }
   next();
 });
