@@ -1,6 +1,12 @@
 import mongoose, { Schema, model } from 'mongoose';
-import Counter from './OrderCounter.js';
-import { OrderStatuses } from '../constants/orderStatuses.js';
+import { OrderStatuses } from '../constants/orderStatuses.js'; // NEW: Import OrderStatuses
+
+// --- Counter Schema for Order Codes ---
+const OrderCounterSchema = new Schema({
+  _id: { type: String, required: true }, // e.g., 'orderCode'
+  seq: { type: Number, default: 0 },
+});
+const OrderCounter = mongoose.models.OrderCounter || mongoose.model('OrderCounter', OrderCounterSchema);
 
 const OrderSchema = new Schema({
   code: {
@@ -10,61 +16,68 @@ const OrderSchema = new Schema({
     index: true,
     unique: true, // Order code must be unique
   },
-  outlet: { // Embedded document for outlet details (snapshot at time of order)
+  status: { // e.g., 'ordered', 'processed', 'ontheway', 'accepted', 'returned', 'failed'
+    type: String,
+    enum: Object.values(OrderStatuses), // MODIFIED: Use the new OrderStatuses enum
+    default: OrderStatuses.ORDERED, // MODIFIED: Default to 'ordered'
+    index: true,
+  },
+  outlet: { // Embedded document: Snapshot of outlet details that placed the order
     outletId: {
       type: Schema.Types.ObjectId,
       ref: 'Outlet',
       required: true,
     },
     name: { type: String, required: true, trim: true },
-    address: { // Snapshot of address details
+    address: { // Include address as a sub-document within the outlet snapshot
       province: { type: String, trim: true },
       regency: { type: String, trim: true },
       district: { type: String, trim: true },
       village: { type: String, trim: true },
       street: { type: String, trim: true },
-      _id: false // Prevents Mongoose from adding an _id to the embedded address object
+      _id: false
     },
-    _id: false // Prevents Mongoose from adding an _id to the embedded outlet object
+    _id: false
   },
-  items: [ // Array of embedded documents for ordered ingredients
+  // REMOVED: customerName and customerPhone are no longer needed for ingredient orders
+  items: [ // Array of ingredient items in the order
     {
       ingredientId: {
         type: Schema.Types.ObjectId,
-        ref: 'Ingredient',
+        ref: 'Ingredient', // Reference to the Ingredient document
         required: true,
       },
-      name: { type: String, required: true, trim: true }, // Ingredient name snapshot
-      qty: { type: Number, required: true, min: 0 },
-      price: { type: Number, required: true, min: 0 }, // Ingredient price snapshot at time of order
-      unit: { type: String, required: true, trim: true }, // Ingredient unit snapshot
-      isAccepted: { type: Boolean, default: false }, // Status for individual item acceptance
-      _id: false // Prevents Mongoose from adding an _id to each subdocument in the array
+      name: { type: String, required: true, trim: true }, // Snapshot of ingredient name
+      unit: { type: String, required: true, trim: true }, // NEW: Snapshot of ingredient unit
+      qty: { type: Number, required: true, min: 1 },
+      price: { type: Number, required: true, min: 0 }, // Snapshot of ingredient price at time of order
+      notes: { type: String, trim: true, default: null },
+      isAccepted: { // Marks if this ingredient item has been accepted/received by the outlet from HQ
+        type: Boolean,
+        default: false,
+      },
+      // Reference to the OutletInventoryTransaction created when this ingredient item is accepted (received)
+      outletInventoryTransactionId: {
+        type: Schema.Types.ObjectId,
+        ref: 'OutletInventoryTransaction',
+        default: null, // Will be populated when isAccepted becomes true
+      },
+      _id: false
     }
   ],
-  total: {
+  totalPrice: { // Total calculated cost of all ordered ingredients
     type: Number,
     required: true,
     min: 0,
-    default: 0 // Will be calculated dynamically
+    default: 0,
   },
-  status: {
-    type: String,
-    enum: Object.values(OrderStatuses), // MODIFIED: Using enum from OrderStatuses file
-    default: OrderStatuses.ORDERED, // MODIFIED: Using enum from OrderStatuses file
-    required: true
-  },
-  createdBy: { // Who created the order
+  createdBy: { // User who placed the order (e.g., Outlet Operator/Manager)
     userId: {
       type: Schema.Types.ObjectId,
       ref: 'User',
       required: true,
     },
-    userName: {
-      type: String,
-      required: true,
-      trim: true
-    },
+    name: { type: String, required: true, trim: true },
     _id: false
   },
   isDeleted: {
@@ -78,7 +91,7 @@ const OrderSchema = new Schema({
   },
   deletedBy: {
     type: Schema.Types.ObjectId,
-    ref: 'User', // Reference to User model (if you implement UserSchema)
+    ref: 'User',
     default: null,
   },
 }, {
@@ -103,46 +116,27 @@ OrderSchema.virtual('id').get(function () {
   return this._id.toHexString();
 });
 
-// --- Pre-save hook to generate automatic 'code' with daily reset ---
+// --- Pre-save hook to generate automatic 'code' (ORDER + YYMMDD + 3 digit counter) ---
 OrderSchema.pre('save', async function(next) {
   if (this.isNew) { // Only generate code for new documents
     const today = new Date();
-    // Format date for counter ID: YYMMDD (e.g., 240622)
+    // Format date: YYMMDD (e.g., 240623)
     const formattedDate = `${String(today.getFullYear()).slice(-2)}${String(today.getMonth() + 1).padStart(2, '0')}${String(today.getDate()).padStart(2, '0')}`;
-    const counterId = `order_${formattedDate}`;
+
+    const counterId = `order_${formattedDate}`; // Counter per day
 
     try {
-      // Find and update the counter for today. Upsert creates it if it doesn't exist.
-      const counter = await Counter.findOneAndUpdate(
+      const counter = await OrderCounter.findOneAndUpdate(
         { _id: counterId },
         { $inc: { seq: 1 } },
-        { upsert: true, new: true }
+        { upsert: true, new: true, setDefaultsOnInsert: true }
       );
 
-      // Check if the lastResetDate for this counter document is from a previous day.
-      // This handles cases where the server might restart or if it's the first order of a new day.
-      const lastResetDateOnly = new Date(counter.lastResetDate).toDateString();
-      const todayDateOnly = today.toDateString();
-
-      let currentSeq = counter.seq;
-      if (lastResetDateOnly !== todayDateOnly) {
-        // If it's a new day, reset sequence to 1
-        const newCounter = await Counter.findOneAndUpdate(
-          { _id: counterId },
-          { seq: 1, lastResetDate: today }, // Set seq to 1 and update lastResetDate
-          { new: true }
-        );
-        currentSeq = newCounter.seq;
-      } else {
-        // If it's the same day, just update lastResetDate for consistency
-        await Counter.updateOne({ _id: counterId }, { lastResetDate: today });
-      }
-
-      // Format the sequence number with leading zeros (e.g., 001, 010, 123)
-      this.code = `ORDER${formattedDate}${String(currentSeq).padStart(3, '0')}`;
+      // Final order code format: ORDER + YYMMDD + 3 DIGIT COUNTER
+      this.code = `ORDER${formattedDate}${String(counter.seq).padStart(3, '0')}`;
 
     } catch (error) {
-      console.error('Gagal membuat kode pesanan:', error);
+      console.error('Kesalahan saat membuat kode pesanan:', error);
       return next(new Error('Gagal membuat kode pesanan. Silakan coba lagi.'));
     }
   }

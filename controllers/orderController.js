@@ -1,37 +1,47 @@
 // controllers/orderController.js
 
-import Order from '../models/Order.js'; // Import the Order model
-import Outlet from '../models/Outlet.js'; // For outlet details embedding
-import Ingredient from '../models/Ingredient.js'; // For ingredient details embedding
-import User from '../models/User.js'; // For createdBy user validation
-import mongoose from 'mongoose'; // For ObjectId validation
-import { OrderStatuses } from '../constants/orderStatuses.js'; // NEW: Import OrderStatuses enum
+import Order from '../models/Order.js';
+import Outlet from '../models/Outlet.js';
+import User from '../models/User.js';
+import OutletInventoryTransaction from '../models/OutletInventoryTransaction.js';
+import Ingredient from '../models/Ingredient.js';
+import { Roles } from '../constants/roles.js';
+import { TransactionTypes } from '../constants/transactionTypes.js';
+import { SourceTypes } from '../constants/sourceTypes.js';
+import { OrderStatuses } from '../constants/orderStatuses.js'; // NEW: Import OrderStatuses
+import mongoose from 'mongoose';
 
-// Helper function for common validation for user references
-const validateUserReference = async (userId, errorsArray, fieldName) => {
+// Helper function to validate User references
+const validateUserReference = async (userId, errorsArray, fieldName, requiredRole = null) => {
   if (!userId || !mongoose.Types.ObjectId.isValid(userId)) {
     errorsArray.push(`ID Pengguna tidak valid untuk ${fieldName}.`);
     return null;
   }
   const user = await User.findById(userId);
-  if (!user || user.isDeleted || !user.isActive) { // Assuming user needs to be active and not deleted
+  if (!user || user.isDeleted || !user.isActive) {
     errorsArray.push(`Pengguna dengan ID '${userId}' untuk ${fieldName} tidak ditemukan, sudah dihapus, atau tidak aktif.`);
     return null;
   }
-  return { userId: user._id, userName: user.name };
+  if (requiredRole && !user.roles.includes(requiredRole)) {
+    errorsArray.push(`Pengguna '${user.name}' (ID: '${userId}') untuk ${fieldName} bukan peran '${requiredRole}'.`);
+    return null;
+  }
+  return { userId: user._id, name: user.name };
 };
 
-// @desc    Create a new order
-// @route   POST /api/orders
-// @access  Public (in a real app, typically Private/Authenticated)
+// --- CRUD Controller Functions for Order ---
+
+// @desc    Create a new order (for ingredients from headquarters)
+// @route   POST /api/v1/orders
+// @access  Private (Operator role for placing, Admin for HQ)
 export const createOrder = async (req, res) => {
   try {
-    const { outletId, items, status } = req.body; // createdBy is now implicitly from req.user
-    let totalOrderPrice = 0;
+    const { outletId, items } = req.body; // REMOVED: customerName, customerPhone
     const errors = [];
-    const processedItems = []; // To store validated and enriched items
+    let calculatedTotalPrice = 0; // Total cost of ordered ingredients
 
     // --- Validate Outlet ---
+    let outletSnapshot;
     if (!outletId || !mongoose.Types.ObjectId.isValid(outletId)) {
       errors.push('ID Outlet tidak valid.');
     } else {
@@ -39,77 +49,79 @@ export const createOrder = async (req, res) => {
       if (!outlet || outlet.isDeleted || !outlet.isActive) {
         errors.push('Outlet yang disediakan tidak ditemukan, sudah dihapus, atau tidak aktif.');
       } else {
-        // Embed outlet details
-        req.body.outlet = {
+        outletSnapshot = {
           outletId: outlet._id,
           name: outlet.name,
-          address: outlet.address // Embed entire address subdocument
+          address: outlet.address // Include the full address subdocument
         };
       }
     }
 
-    // --- Populate CreatedBy User from req.user (assuming authentication middleware) ---
-    if (!req.user || !req.user._id) { // Assuming req.user exists and has _id
-      errors.push('Informasi pengguna pembuat tidak tersedia. Pastikan pengguna terautentikasi.');
+    // --- Validate CreatedBy (User who placed the order - likely an Operator or Admin from an Outlet) ---
+    let createdBySnapshot;
+    if (!req.user || !req.user._id || !req.user.name) {
+      errors.push('Informasi pengguna pembuat pesanan tidak tersedia. Pastikan pengguna terautentikasi.');
     } else {
-      req.body.createdBy = {
-        userId: req.user._id, // Use _id directly from the authenticated user object
-        userName: req.user.name || 'Pengguna Tidak Dikenal' // Use user's name, fallback if not available
-      };
+      // Assuming operator/admin can place orders from an outlet
+      const user = await validateUserReference(req.user._id, errors, 'pembuat pesanan');
+      if (user) {
+        createdBySnapshot = { userId: user.userId, name: user.name };
+      }
     }
 
-    // --- Validate Order Items ---
+    // --- Validate and Process Order Items (Ingredients) ---
+    const processedItems = [];
     if (!items || !Array.isArray(items) || items.length === 0) {
-      errors.push('Setidaknya satu item pesanan diperlukan.');
+      errors.push('Daftar item pesanan (bahan) diperlukan.');
     } else {
       for (const item of items) {
-        if (!item.ingredientId || !mongoose.Types.ObjectId.isValid(item.ingredientId)) {
-          errors.push(`Item pesanan memiliki ID bahan tidak valid: '${item.ingredientId}'.`);
+        // Each item here is an ingredient being ordered
+        if (!item.ingredientId || !mongoose.Types.ObjectId.isValid(item.ingredientId) || item.qty === undefined || item.qty < 1) {
+          errors.push('Item pesanan memiliki format ID bahan atau jumlah yang tidak valid (minimal 1).');
           continue;
         }
-        if (item.qty === undefined || typeof item.qty !== 'number' || item.qty <= 0) {
-          errors.push(`Jumlah bahan '${item.ingredientId}' harus berupa angka positif.`);
-          continue;
-        }
-
         const ingredient = await Ingredient.findById(item.ingredientId);
         if (!ingredient || ingredient.isDeleted || !ingredient.isActive) {
-          errors.push(`Bahan dengan ID '${item.ingredientId}' tidak ditemukan, sudah dihapus, atau tidak aktif.`);
+          errors.push(`Bahan ID '${item.ingredientId}' tidak ditemukan, sudah dihapus, atau tidak aktif.`);
           continue;
         }
 
-        // Embed ingredient details at the time of order
         processedItems.push({
-          ingredientId: ingredient._id,
-          name: ingredient.name,
+          ingredientId: ingredient._id, // Store ingredient ID
+          name: ingredient.name,       // Snapshot ingredient name
+          unit: ingredient.unit,       // NEW: Snapshot ingredient unit
           qty: item.qty,
-          price: ingredient.price, // Use ingredient's current price
-          unit: ingredient.unit,   // Use ingredient's current unit
-          isAccepted: item.isAccepted !== undefined ? item.isAccepted : false // Use provided or default to false
+          price: ingredient.price,     // Snapshot ingredient price at time of order
+          notes: item.notes || null,
+          isAccepted: item.isAccepted || false, // Default to false
+          outletInventoryTransactionId: null, // Initialize as null
         });
-        totalOrderPrice += item.qty * ingredient.price;
+        // Calculate total price based on ingredient price
+        calculatedTotalPrice += item.qty * ingredient.price;
       }
-      req.body.items = processedItems; // Replace with processed items
-      req.body.total = totalOrderPrice; // Set calculated total
-    }
-
-    // --- Validate Status (optional on create, will default to 'ordered') ---
-    if (status !== undefined && !Object.values(OrderStatuses).includes(status)) { // MODIFIED: Use OrderStatuses enum
-      errors.push('Status pesanan tidak valid.');
     }
 
     if (errors.length > 0) {
       return res.status(400).json({ message: 'Validasi gagal.', errors });
     }
-    // --- End Controller-side Validation ---
 
-    const order = await Order.create(req.body); // Schema pre-save hook will generate code
+    const orderData = {
+      outlet: outletSnapshot,
+      // REMOVED: customerName, customerPhone
+      items: processedItems,
+      totalPrice: calculatedTotalPrice,
+      createdBy: createdBySnapshot,
+      status: OrderStatuses.ORDERED, // MODIFIED: Default to 'ordered'
+    };
+
+    const order = await Order.create(orderData); // Code generated by pre-save hook
     res.status(201).json({
-      message: 'Pesanan berhasil dibuat.',
+      message: 'Pesanan bahan berhasil dicatat.',
       order: order.toJSON()
     });
+
   } catch (error) {
-    if (error.code === 11000) { // Duplicate key error (e.g., from code uniqueness, though less likely with daily reset)
+    if (error.code === 11000) {
       const field = Object.keys(error.keyValue)[0];
       const value = error.keyValue[field];
       return res.status(409).json({ message: `Pesanan dengan ${field} '${value}' sudah ada.` });
@@ -118,66 +130,58 @@ export const createOrder = async (req, res) => {
       const errors = Object.keys(error.errors).map(key => error.errors[key].message);
       return res.status(400).json({ message: 'Validasi gagal.', errors });
     }
-    console.error('Kesalahan saat membuat pesanan:', error);
-    res.status(500).json({ message: 'Kesalahan server saat membuat pesanan.', error: error.message });
+    console.error('Kesalahan saat membuat pesanan bahan:', error);
+    res.status(500).json({ message: 'Kesalahan server saat membuat pesanan bahan.', error: error.message });
   }
 };
 
-// @desc    Get all orders
-// @route   GET /api/orders
-// @access  Public (in a real app, typically Private/Authenticated)
+// @desc    Get all orders (for ingredients)
+// @route   GET /api/v1/orders
+// @access  Private (Admin, SPV Area, Operator for their outlet)
 export const getOrders = async (req, res) => {
   try {
-    const filter = { isDeleted: false }; // Default: get non-deleted orders
-    // Filtering by status
-    if (req.query.status) {
-      if (!Object.values(OrderStatuses).includes(req.query.status)) { // MODIFIED: Use OrderStatuses enum
-        return res.status(400).json({ message: 'Status pesanan tidak valid untuk filter.' });
-      }
-      filter.status = req.query.status;
-    }
-    // Filtering by outletId
-    if (req.query.outletId) {
-      if (!mongoose.Types.ObjectId.isValid(req.query.outletId)) {
+    const filter = { isDeleted: false };
+    const { outletId, status, dateFrom, dateTo } = req.query; // REMOVED: customerName
+
+    if (outletId) {
+      if (!mongoose.Types.ObjectId.isValid(outletId)) {
         return res.status(400).json({ message: 'ID Outlet tidak valid untuk filter.' });
       }
-      filter['outlet.outletId'] = req.query.outletId; // Filter by embedded outletId
+      filter['outlet.outletId'] = outletId;
     }
-    // Filtering by createdBy.userId
-    if (req.query.createdByUserId) {
-      if (!mongoose.Types.ObjectId.isValid(req.query.createdByUserId)) {
-        return res.status(400).json({ message: 'ID Pengguna pembuat tidak valid untuk filter.' });
+    if (status) {
+      // MODIFIED: Validate against OrderStatuses enum values
+      if (!Object.values(OrderStatuses).includes(status)) {
+        return res.status(400).json({ message: 'Status pesanan tidak valid untuk filter.' });
       }
-      filter['createdBy.userId'] = req.query.createdByUserId; // Filter by embedded createdBy userId
+      filter.status = status;
     }
-    // Filtering by code
-    if (req.query.code) {
-      filter.code = { $regex: req.query.code, $options: 'i' };
-    }
-
-    const query = Order.find(filter).sort({ createdAt: -1 }); // Sort by newest first
-
-    // Populate createdBy user and original Ingredient (optional)
-    const populateFields = req.query.populate;
-    if (populateFields) {
-      if (populateFields.includes('createdBy')) query.populate('createdBy.userId', 'name userId');
-      if (populateFields.includes('items.ingredient')) query.populate('items.ingredientId', 'name unit price'); // Populate original ingredient if needed
-    } else {
-        // Default populate commonly needed fields
-        query.populate('createdBy.userId', 'name userId');
+    // REMOVED: customerName filter
+    if (dateFrom || dateTo) {
+      filter.createdAt = {};
+      if (dateFrom) {
+        const d = new Date(dateFrom);
+        if (isNaN(d.getTime())) { return res.status(400).json({ message: 'Format tanggal "dateFrom" tidak valid.' }); }
+        filter.createdAt.$gte = d;
+      }
+      if (dateTo) {
+        const d = new Date(dateTo);
+        if (isNaN(d.getTime())) { return res.status(400).json({ message: 'Format tanggal "dateTo" tidak valid.' }); }
+        filter.createdAt.$lte = new Date(d.getTime() + 24 * 60 * 60 * 1000 - 1);
+      }
     }
 
-    const orders = await query.exec();
+    const orders = await Order.find(filter).sort({ createdAt: -1 });
     res.status(200).json(orders.map(order => order.toJSON()));
   } catch (error) {
-    console.error('Kesalahan saat mengambil pesanan:', error);
-    res.status(500).json({ message: 'Kesalahan server saat mengambil pesanan.', error: error.message });
+    console.error('Kesalahan saat mengambil pesanan bahan:', error);
+    res.status(500).json({ message: 'Kesalahan server saat mengambil pesanan bahan.', error: error.message });
   }
 };
 
-// @desc    Get a single order by ID
-// @route   GET /api/orders/:id
-// @access  Public (in a real app, typically Private/Authenticated)
+// @desc    Get a single order by ID (for ingredients)
+// @route   GET /api/v1/orders/:id
+// @access  Private (Admin, SPV Area, Operator for their outlet)
 export const getOrderById = async (req, res) => {
   try {
     const { id } = req.params;
@@ -185,28 +189,30 @@ export const getOrderById = async (req, res) => {
       return res.status(400).json({ message: 'Format ID Pesanan tidak valid.' });
     }
 
-    const order = await Order.findById(id)
-                          .populate('createdBy.userId', 'name userId')
-                          .populate('items.ingredientId', 'name unit price'); // Populate original ingredient
+    const order = await Order.findById(id);
 
     if (!order || order.isDeleted === true) {
-      return res.status(404).json({ message: 'Pesanan tidak ditemukan atau sudah dihapus.' });
+      return res.status(404).json({ message: 'Pesanan bahan tidak ditemukan atau sudah dihapus.' });
     }
     res.status(200).json(order.toJSON());
   } catch (error) {
-    console.error('Kesalahan saat mengambil pesanan berdasarkan ID:', error);
-    res.status(500).json({ message: 'Kesalahan server saat mengambil pesanan.', error: error.message });
+    if (error.name === 'CastError' && error.kind === 'ObjectId') {
+        return res.status(400).json({ message: 'Format ID Pesanan tidak valid.' });
+    }
+    console.error('Kesalahan saat mengambil pesanan bahan berdasarkan ID:', error);
+    res.status(500).json({ message: 'Kesalahan server saat mengambil pesanan bahan berdasarkan ID.', error: error.message });
   }
 };
 
-// @desc    Update an order by ID (e.g., change status, update item acceptance)
-// @route   PUT /api/orders/:id
-// @access  Public (in a real app, typically Private/Admin or by assigned roles)
+// @desc    Update an order (e.g., status, accept items/ingredients by HQ)
+// @route   PATCH /api/v1/orders/:id
+// @access  Private (Admin, SPV Area for accepting items)
 export const updateOrder = async (req, res) => {
   try {
     const { id } = req.params;
-    const updateData = { ...req.body };
+    const { status, items } = req.body; // Items here are the ingredient items being updated
     const errors = [];
+    let createdInventoryTransactionId = null; // To store the ID of the new OIT for potential rollback
 
     if (!mongoose.Types.ObjectId.isValid(id)) {
       return res.status(400).json({ message: 'Format ID Pesanan tidak valid.' });
@@ -214,108 +220,154 @@ export const updateOrder = async (req, res) => {
 
     const existingOrder = await Order.findById(id);
     if (!existingOrder || existingOrder.isDeleted) {
-      return res.status(404).json({ message: 'Pesanan tidak ditemukan atau sudah dihapus.' });
+      return res.status(404).json({ message: 'Pesanan bahan tidak ditemukan atau sudah dihapus.' });
     }
 
-    // --- Controller-side Validation for Update ---
-    // Status update validation
-    if (updateData.status !== undefined) {
-      // MODIFIED: Use OrderStatuses enum
-      if (!Object.values(OrderStatuses).includes(updateData.status)) {
+    let updatedFields = {}; // Object to hold fields to be updated in the main order document
+
+    // --- Handle Status Update ---
+    if (status !== undefined) {
+      // MODIFIED: Validate against OrderStatuses enum values
+      if (!Object.values(OrderStatuses).includes(status)) {
         errors.push('Status pesanan tidak valid.');
-      }
-      // Add status transition logic if needed (e.g., cannot go from 'accepted' to 'ordered')
-      // Example: if (existingOrder.status === OrderStatuses.ACCEPTED && updateData.status !== OrderStatuses.RETURNED) { errors.push('Tidak dapat mengubah status pesanan yang sudah diterima kecuali ke "returned".'); }
-    }
-
-    // Items update validation and recalculation
-    if (updateData.items !== undefined) {
-      if (!Array.isArray(updateData.items)) {
-        errors.push('Item pesanan harus berupa array.');
       } else {
-        let newTotal = 0;
-        const updatedItemsArray = [];
-        for (const item of updateData.items) {
-          if (!item.ingredientId || !mongoose.Types.ObjectId.isValid(item.ingredientId)) {
-            errors.push(`Item pesanan memiliki ID bahan tidak valid: '${item.ingredientId}'.`);
-            continue;
-          }
-          if (item.qty === undefined || typeof item.qty !== 'number' || item.qty <= 0) {
-            errors.push(`Jumlah bahan '${item.ingredientId}' harus berupa angka positif.`);
-            continue;
-          }
-          // For updates, we usually don't refetch price/unit unless explicitly intended.
-          // We use the existing price/unit from the original order item unless explicitly changed.
-          const originalItem = existingOrder.items.find(i => i.ingredientId.toString() === item.ingredientId.toString());
-
-          // If updating an existing item or adding a new one with full details
-          const itemPrice = (item.price !== undefined && typeof item.price === 'number' && item.price >= 0) ? item.price : (originalItem ? originalItem.price : 0);
-          const itemUnit = (item.unit !== undefined && typeof item.unit === 'string') ? item.unit : (originalItem ? originalItem.unit : 'unknown');
-          const itemName = (item.name !== undefined && typeof item.name === 'string') ? item.name : (originalItem ? originalItem.name : 'unknown');
-
-
-          updatedItemsArray.push({
-            ingredientId: item.ingredientId,
-            name: itemName.trim(),
-            qty: item.qty,
-            price: itemPrice,
-            unit: itemUnit.trim(),
-            isAccepted: item.isAccepted !== undefined ? item.isAccepted : (originalItem ? originalItem.isAccepted : false)
-          });
-          newTotal += item.qty * itemPrice;
-        }
-        updateData.items = updatedItemsArray;
-        updateData.total = newTotal;
+        updatedFields.status = status;
       }
     }
 
-    // If total is provided explicitly in updateData, it will override calculated total
-    // But it's usually better to always calculate based on items for consistency.
-    if (updateData.total !== undefined && typeof updateData.total !== 'number' || updateData.total < 0) {
-      errors.push('Total harga harus berupa angka non-negatif.');
-    }
+    // --- Handle Items Update (specifically for isAccepted and creating OutletInventoryTransaction) ---
+    if (items !== undefined && Array.isArray(items)) {
+        // Create a deep copy of existing items to modify
+        const newItemsArray = existingOrder.items.map(item => item.toObject());
 
+        // Snapshot of the user making the change for OutletInventoryTransaction.createdBy
+        const createdBySnapshot = req.user ? { userId: req.user._id, name: req.user.name } : { userId: null, name: 'System' };
+
+        for (const updatedItemRequest of items) {
+            // Find the original item from the existing order based on its ingredientId
+            const itemIndex = newItemsArray.findIndex(item => item.ingredientId.toString() === updatedItemRequest.ingredientId.toString());
+
+            if (itemIndex === -1) {
+                errors.push(`ID Bahan '${updatedItemRequest.ingredientId}' tidak ditemukan di pesanan asli.`);
+                continue;
+            }
+
+            const existingItem = newItemsArray[itemIndex];
+
+            // Only proceed if isAccepted is explicitly set to true AND it was previously false or unset
+            if (updatedItemRequest.isAccepted === true && existingItem.isAccepted === false) {
+                // Fetch the Ingredient details to get its current name, unit, and price
+                const ingredientDoc = await Ingredient.findById(existingItem.ingredientId);
+                if (!ingredientDoc || ingredientDoc.isDeleted || !ingredientDoc.isActive) {
+                    errors.push(`Bahan '${existingItem.name}' (ID: '${existingItem.ingredientId}') tidak ditemukan, sudah dihapus, atau tidak aktif saat mencoba membuat transaksi inventori.`);
+                    continue;
+                }
+
+                try {
+                    const newTransaction = await OutletInventoryTransaction.create({
+                        ingredient: {
+                            ingredientId: ingredientDoc._id,
+                            name: ingredientDoc.name,
+                            unit: ingredientDoc.unit,
+                        },
+                        price: ingredientDoc.price, // Snapshot current price of the ingredient
+                        outlet: {
+                            outletId: existingOrder.outlet.outletId,
+                            name: existingOrder.outlet.name,
+                            address: existingOrder.outlet.address,
+                        },
+                        source: {
+                            sourceType: SourceTypes.ORDER,
+                            ref: existingOrder.code,
+                        },
+                        transactionType: TransactionTypes.IN, // Ingredients coming IN to outlet inventory
+                        qty: existingItem.qty, // Quantity from the order item
+                        notes: `Penerimaan bahan ${ingredientDoc.name} dari pesanan HQ (${existingOrder.code}).`,
+                        createdBy: createdBySnapshot,
+                        evidenceUrl: null, // No direct evidence for auto-generated transactions from order acceptance
+                        isValid: true, // Auto-validated
+                        isCalculated: false, // Pending calculation by inventory system
+                    });
+                    createdInventoryTransactionId = newTransaction._id; // Store for potential rollback
+
+                    // Update the order item with the new transaction ID and set isAccepted to true
+                    existingItem.isAccepted = true;
+                    existingItem.outletInventoryTransactionId = createdInventoryTransactionId;
+
+                } catch (trxError) {
+                    console.error(`Error creating inventory transaction for ingredient ${ingredientDoc.name}:`, trxError);
+                    errors.push(`Gagal membuat transaksi inventori untuk bahan '${ingredientDoc.name}' dari pesanan '${existingOrder.code}'.`);
+                    createdInventoryTransactionId = null; // Clear if transaction creation failed
+                }
+            } else if (updatedItemRequest.isAccepted === false && existingItem.isAccepted === true) {
+                // Prevent un-acceptance for now. If needed, this would involve reversing or invalidating the OIT.
+                errors.push(`Tidak dapat mengubah status 'isAccepted' menjadi false untuk item bahan '${existingItem.name}' yang sudah diterima.`);
+            }
+            // Any other fields in updatedItemRequest (like qty, notes) are ignored for simplicity here
+            // as the items array update is focused on 'isAccepted' and its side effects.
+        } // End of updated items loop
+
+        if (errors.length > 0) {
+             // If any errors, attempt to clean up any single transaction that was successfully created
+             if (createdInventoryTransactionId) {
+                 try {
+                     await OutletInventoryTransaction.findByIdAndDelete(createdInventoryTransactionId);
+                     console.log(`Rolled back inventory transaction ${createdInventoryTransactionId} due to order update failure.`);
+                 } catch (rollbackErr) {
+                     console.error(`Failed to rollback inventory transaction ${createdInventoryTransactionId}:`, rollbackErr);
+                 }
+             }
+            return res.status(400).json({ message: 'Validasi gagal pada item pesanan atau kesalahan transaksi inventori.', errors });
+        }
+
+        updatedFields.items = newItemsArray; // Update the items array in the main update object
+    }
 
     if (errors.length > 0) {
       return res.status(400).json({ message: 'Validasi gagal.', errors });
     }
-    // --- End Controller-side Validation ---
 
     const order = await Order.findByIdAndUpdate(
       id,
-      updateData,
-      { new: true, runValidators: true } // runValidators to trigger schema validation (e.g., enum on status)
+      { $set: updatedFields }, // Use $set to update specific fields
+      { new: true, runValidators: true }
     );
 
     if (!order) {
-      return res.status(404).json({ message: 'Pesanan tidak ditemukan.' });
+      return res.status(404).json({ message: 'Pesanan bahan tidak ditemukan.' });
     }
 
     res.status(200).json({
-      message: 'Pesanan berhasil diperbarui.',
+      message: 'Pesanan bahan berhasil diperbarui.',
       order: order.toJSON()
     });
+
   } catch (error) {
+    // If an unexpected error occurs during the process, attempt to clean up any created transaction
+    if (createdInventoryTransactionId) {
+        try {
+            await OutletInventoryTransaction.findByIdAndDelete(createdInventoryTransactionId);
+            console.log(`Rolled back inventory transaction ${createdInventoryTransactionId} due to unexpected error.`);
+        } catch (rollbackErr) {
+            console.error(`Failed to rollback inventory transaction ${createdInventoryTransactionId} on unexpected error:`, rollbackErr);
+        }
+    }
     if (error.name === 'CastError' && error.kind === 'ObjectId') {
         return res.status(400).json({ message: 'Format ID Pesanan tidak valid.' });
-    }
-    if (error.code === 11000) { // Duplicate key error for 'code'
-      const field = Object.keys(error.keyValue)[0];
-      const value = error.keyValue[field];
-      return res.status(409).json({ message: `Pesanan dengan ${field} '${value}' sudah ada.` });
     }
     if (error.name === 'ValidationError') {
       const errors = Object.keys(error.errors).map(key => error.errors[key].message);
       return res.status(400).json({ message: 'Validasi gagal.', errors });
     }
-    console.error('Kesalahan saat memperbarui pesanan:', error);
-    res.status(500).json({ message: 'Kesalahan server saat memperbarui pesanan.', error: error.message });
+    console.error('Kesalahan saat memperbarui pesanan bahan:', error);
+    res.status(500).json({ message: 'Kesalahan server saat memperbarui pesanan bahan.', error: error.message });
   }
 };
 
-// @desc    Soft delete an order by ID
-// @route   DELETE /api/orders/:id
-// @access  Public (in a real app, typically Private/Admin)
+
+// @desc    Soft delete an order (Admin only)
+// @route   DELETE /api/v1/orders/:id
+// @access  Private (Admin role)
 export const deleteOrder = async (req, res) => {
   try {
     const { id } = req.params;
@@ -323,139 +375,30 @@ export const deleteOrder = async (req, res) => {
       return res.status(400).json({ message: 'Format ID Pesanan tidak valid.' });
     }
 
+    // Security check: Ensure only Admin can perform this soft delete
+    if (!req.user || !req.user.roles || !req.user.roles.includes(Roles.admin)) {
+       return res.status(403).json({ message: 'Anda tidak memiliki izin untuk menghapus pesanan bahan ini.' });
+    }
+
     const order = await Order.findByIdAndUpdate(
       id,
-      { isDeleted: true, deletedAt: new Date() /* , deletedBy: req.user.id */ },
+      { isDeleted: true, deletedAt: new Date(), deletedBy: req.user._id },
       { new: true }
     );
 
     if (!order) {
-      return res.status(404).json({ message: 'Pesanan tidak ditemukan.' });
+      return res.status(404).json({ message: 'Pesanan bahan tidak ditemukan.' });
     }
 
     res.status(200).json({
-      message: 'Pesanan berhasil dihapus (soft delete).',
+      message: 'Pesanan bahan berhasil dihapus (soft delete).',
       order: order.toJSON()
     });
   } catch (error) {
     if (error.name === 'CastError' && error.kind === 'ObjectId') {
         return res.status(400).json({ message: 'Format ID Pesanan tidak valid.' });
     }
-    console.error('Kesalahan saat menghapus pesanan:', error);
-    res.status(500).json({ message: 'Kesalahan server saat menghapus pesanan.', error: error.message });
+    console.error('Kesalahan saat menghapus pesanan bahan:', error);
+    res.status(500).json({ message: 'Kesalahan server saat menghapus pesanan bahan.', error: error.message });
   }
 };
-
-// @desc    Get orders for one or more outlets by their IDs
-// @route   GET /api/orders/by-outlets
-// @access  Public (in a real app, typically Private/Authenticated/Role-based)
-export const getOrdersByOutlets = async (req, res) => {
-  try {
-    const { outletIds } = req.query; // Expecting outletIds as a comma-separated string or array
-
-    if (!outletIds) {
-      return res.status(400).json({ message: 'Parameter "outletIds" diperlukan (berupa satu ID atau daftar ID yang dipisahkan koma).' });
-    }
-
-    let outletIdList = [];
-    if (Array.isArray(outletIds)) {
-      outletIdList = outletIds;
-    } else {
-      outletIdList = outletIds.split(','); // Split by comma if it's a string
-    }
-
-    // Validate each ID in the list
-    const invalidIds = outletIdList.filter(id => !mongoose.Types.ObjectId.isValid(id.trim()));
-    if (invalidIds.length > 0) {
-      return res.status(400).json({ message: `Format ID Outlet tidak valid: ${invalidIds.join(', ')}.` });
-    }
-
-    const filter = {
-      isDeleted: false,
-      'outlet.outletId': { $in: outletIdList.map(id => id.trim()) } // Filter by embedded outletId using $in
-    };
-
-    // Add optional query parameters from req.query (status, createdByUserId, code)
-    if (req.query.status) {
-      if (!Object.values(OrderStatuses).includes(req.query.status)) { // MODIFIED: Use OrderStatuses enum
-        return res.status(400).json({ message: 'Status pesanan tidak valid untuk filter.' });
-      }
-      filter.status = req.query.status;
-    }
-    if (req.query.createdByUserId) {
-      if (!mongoose.Types.ObjectId.isValid(req.query.createdByUserId)) {
-        return res.status(400).json({ message: 'ID Pengguna pembuat tidak valid untuk filter.' });
-      }
-      filter['createdBy.userId'] = req.query.createdByUserId;
-    }
-    if (req.query.code) {
-      filter.code = { $regex: req.query.code, $options: 'i' };
-    }
-
-    const query = Order.find(filter).sort({ createdAt: -1 });
-
-    query.populate('createdBy.userId', 'name userId');
-    // You might also populate 'items.ingredientId' here if you want full details
-    // query.populate('items.ingredientId', 'name unit price');
-
-    const orders = await query.exec();
-    res.status(200).json(orders.map(order => order.toJSON()));
-
-  } catch (error) {
-    console.error('Kesalahan saat mengambil pesanan berdasarkan daftar Outlet ID:', error);
-    res.status(500).json({ message: 'Kesalahan server saat mengambil pesanan berdasarkan daftar Outlet ID.', error: error.message });
-  }
-};
-
-// @desc    Update 'isAccepted' status of a specific item within an order
-// @route   PATCH /api/v1/orders/:orderId/items/:ingredientId/acceptance
-// @access  Public (in a real app, typically Private/Admin or by assigned roles)
-export const updateOrderItemAcceptance = async (req, res) => {
-  try {
-    const { orderId, ingredientId } = req.params;
-    const { isAccepted } = req.body; // Expecting { "isAccepted": true/false }
-
-    // --- Validation ---
-    if (!mongoose.Types.ObjectId.isValid(orderId)) {
-      return res.status(400).json({ message: 'Format ID Pesanan tidak valid.' });
-    }
-    if (!mongoose.Types.ObjectId.isValid(ingredientId)) {
-      return res.status(400).json({ message: 'Format ID Bahan tidak valid.' });
-    }
-    if (typeof isAccepted !== 'boolean') {
-      return res.status(400).json({ message: 'Nilai "isAccepted" harus berupa boolean (true/false).' });
-    }
-
-    const order = await Order.findById(orderId);
-
-    if (!order || order.isDeleted) {
-      return res.status(404).json({ message: 'Pesanan tidak ditemukan atau sudah dihapus.' });
-    }
-
-    // Find the item within the order's items array
-    const itemToUpdate = order.items.find(item => item.ingredientId.toString() === ingredientId);
-
-    if (!itemToUpdate) {
-      return res.status(404).json({ message: `Bahan dengan ID '${ingredientId}' tidak ditemukan dalam pesanan ini.` });
-    }
-
-    // Update the isAccepted status
-    itemToUpdate.isAccepted = isAccepted;
-
-    // Save the modified order document
-    await order.save({ validateBeforeSave: false }); // Skip full schema validation if only updating subdocument field
-
-    res.status(200).json({
-      message: `Status penerimaan bahan '${itemToUpdate.name}' berhasil diperbarui menjadi ${isAccepted}.`,
-      order: order.toJSON()
-    });
-
-  } catch (error) {
-    if (error.name === 'CastError') { // Catch invalid ID formats from Mongoose
-      return res.status(400).json({ message: 'Format ID tidak valid (Pesanan atau Bahan).' });
-    }
-    console.error('Kesalahan saat memperbarui status penerimaan item pesanan:', error);
-    res.status(500).json({ message: 'Kesalahan server saat memperbarui status penerimaan item pesanan.', error: error.message });
-  }
-};
-

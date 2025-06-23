@@ -1,11 +1,11 @@
 import express from 'express';
 const router = express.Router();
-import * as address from '../controllers/addressController.js';
+import * as controller from '../controllers/addressController.js';
 
-router.get('/provinces', address.getProvinces);
-router.get('/regencies/:provinceId', address.getRegencies);
-router.get('/districts/:regencyId', address.getDistricts);
-router.get('/villages/:districtId', address.getVillages);
-router.get('/:id', address.getSingleAddressById);
+router.get('/provinces', controller.getProvinces);
+router.get('/regencies/:provinceId', controller.getRegencies);
+router.get('/districts/:regencyId', controller.getDistricts);
+router.get('/villages/:districtId', controller.getVillages);
+router.get('/:id', controller.getSingleAddressById);
 
 export default router;

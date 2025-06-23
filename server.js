@@ -4,6 +4,7 @@ import http from 'http';
 import { Server } from 'socket.io';
 import cors from 'cors';
 import connectDB from './config/db.js';
+import path from 'path';
 
 // import custom modules
 import addressRoutes from './routes/addressRoutes.js';
@@ -17,6 +18,8 @@ import outletRoutes from './routes/outletRoutes.js';
 import orderRoutes from './routes/orderRoutes.js';
 import bundleRoutes from './routes/bundleRoutes.js';
 import attendanceRoutes from './routes/attendanceRoutes.js';
+import saleRoutes from './routes/saleRoutes.js';
+import outletInventoryTransactionRoutes from './routes/outletInventoryTransactionRoutes.js';
 
 const app = express();
 const server = http.createServer(app);
@@ -41,7 +44,11 @@ app.use(logger);
 // setupSocket(io);
 
 // Serve static files from the 'uploads' directory
-app.use('/uploads/attendance/evidence', express.static('uploads')); // MODIFIED: Path changed
+app.use('/uploads/attendance/evidence', express.static(path.join('uploads', 'attendance', 'evidence'))); // Updated to specifically point to the correct sub-directory
+
+// Payment evidence files: accessible via /uploads/payment/evidence/filename.webp or .pdf
+app.use('/uploads/payment/evidence', express.static(path.join('uploads', 'payment', 'evidence'))); // MODIFIED: Path changed
+app.use('/uploads/inventory_evidence', express.static(path.join('uploads', 'inventory_evidence')));
 
 // Routes
 app.use('/api/v1/address', addressRoutes);
@@ -55,6 +62,8 @@ app.use('/api/v1/outlets', outletRoutes);
 app.use('/api/v1/orders', orderRoutes);
 app.use('/api/v1/bundles', bundleRoutes);
 app.use('/api/v1/attendances', attendanceRoutes);
+app.use('/api/v1/sales', saleRoutes);
+app.use('/api/v1/outletinventorytransactions', outletInventoryTransactionRoutes);
 
 // Basic route for testing server status
 app.get('/api/v1', (req, res) => {

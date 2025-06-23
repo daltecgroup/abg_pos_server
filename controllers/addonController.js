@@ -1,77 +1,83 @@
-import Addon from '../models/Addon.js'; // Import the Addon model
-import Ingredient from '../models/Ingredient.js'; // Import for ingredient validation
+import Addon from '../models/Addon.js';
 import mongoose from 'mongoose'; // For ObjectId validation
+import Ingredient from '../models/Ingredient.js'; // Needed for ingredient validation in recipe
+
+// --- CRUD Controller Functions for Addon ---
 
 // @desc    Create a new addon
 // @route   POST /api/v1/addons
-// @access  Private/Admin
+// @access  Public (in a real app, typically Private/Admin and authenticated)
 export const createAddon = async (req, res) => {
   try {
-    const { name, price, ingredients, imgUrl, isActive } = req.body;
+    const { name, price, isActive, recipe } = req.body;
 
-    // --- Controller-side Validation for Create ---
     const errors = [];
 
+    // Basic validation
     if (!name || name.trim() === '') {
-      errors.push('Nama wajib diisi.');
+      errors.push('Nama addon diperlukan.');
     }
     if (price === undefined || typeof price !== 'number' || price < 0) {
-      errors.push('Harga wajib diisi dan harus berupa angka non-negatif.');
-    }
-    if (!ingredients || !Array.isArray(ingredients) || ingredients.length === 0) {
-      errors.push('Bahan-bahan wajib diisi dan harus berupa array dengan setidaknya satu item.');
-    } else {
-      // Validate each ingredient item in the array
-      for (let i = 0; i < ingredients.length; i++) {
-        const item = ingredients[i];
-        if (!item.ingredientId || !mongoose.Types.ObjectId.isValid(item.ingredientId)) {
-          errors.push(`Bahan pada indeks ${i} memiliki ingredientId yang tidak valid.`);
-        } else {
-          // Check if ingredient actually exists
-          const existingIngredient = await Ingredient.findById(item.ingredientId);
-          if (!existingIngredient || existingIngredient.isDeleted || !existingIngredient.isActive) {
-            errors.push(`ID Bahan '${item.ingredientId}' pada indeks ${i} tidak ada, sudah dihapus, atau tidak aktif.`);
-          }
-        }
-        if (item.qty === undefined || typeof item.qty !== 'number' || item.qty <= 0) {
-          errors.push(`Kuantitas untuk bahan pada indeks ${i} wajib diisi dan harus berupa angka positif.`);
-        }
-      }
-    }
-    if (imgUrl !== undefined && typeof imgUrl !== 'string') {
-        errors.push('imgUrl harus berupa string jika disediakan.');
-    } else if (imgUrl !== undefined) {
-        req.body.imgUrl = imgUrl.trim(); // Trim imgUrl if provided
+      errors.push('Harga addon diperlukan dan harus berupa angka non-negatif.');
     }
     if (isActive !== undefined && typeof isActive !== 'boolean') {
       errors.push('isActive harus berupa boolean jika disediakan.');
     }
 
-    if (errors.length > 0) {
-      return res.status(400).json({ message: 'Validasi gagal', errors });
+    // NEW: Validate recipe ingredients
+    const processedRecipe = [];
+    if (recipe !== undefined) {
+      if (!Array.isArray(recipe)) {
+        errors.push('Resep harus berupa array.');
+      } else {
+        for (let i = 0; i < recipe.length; i++) {
+          const item = recipe[i];
+          if (!item.ingredientId || !mongoose.Types.ObjectId.isValid(item.ingredientId)) {
+            errors.push(`Resep di indeks ${i} memiliki ID bahan tidak valid.`);
+            continue;
+          }
+          // Assuming Ingredient model and isActive/isDeleted status
+          const existingIngredient = await Ingredient.findById(item.ingredientId);
+          if (!existingIngredient || existingIngredient.isDeleted || !existingIngredient.isActive) {
+            errors.push(`Bahan dengan ID '${item.ingredientId}' di indeks resep ${i} tidak ditemukan, sudah dihapus, atau tidak aktif.`);
+          }
+          if (item.qty === undefined || typeof item.qty !== 'number' || item.qty < 0) {
+            errors.push(`Jumlah bahan di indeks resep ${i} diperlukan dan harus berupa angka non-negatif.`);
+          }
+          processedRecipe.push({
+            ingredientId: item.ingredientId,
+            qty: item.qty
+          });
+        }
+      }
+      req.body.recipe = processedRecipe; // Replace with validated/processed recipe
     }
-    // --- End Controller-side Validation ---
+
+
+    if (errors.length > 0) {
+      return res.status(400).json({ message: 'Validasi gagal.', errors });
+    }
 
     // Trim name before creating
     req.body.name = req.body.name.trim();
 
     const addon = await Addon.create(req.body); // Code will be set by pre-save hook
     res.status(201).json({
-      message: 'Addon berhasil dibuat',
+      message: 'Addon berhasil dibuat.',
       addon: addon.toJSON()
     });
   } catch (error) {
-    if (error.code === 11000) { // Duplicate key error for 'name'
+    if (error.code === 11000) { // Duplicate key error for 'code' or 'name'
       const field = Object.keys(error.keyValue)[0];
       const value = error.keyValue[field];
-      return res.status(409).json({ message: `Addon dengan ${field} '${value}' ini sudah ada.` });
+      return res.status(409).json({ message: `Addon dengan ${field} '${value}' sudah ada.` });
     }
     if (error.name === 'ValidationError') {
       const errors = Object.keys(error.errors).map(key => error.errors[key].message);
-      return res.status(400).json({ message: 'Validasi gagal', errors });
+      return res.status(400).json({ message: 'Validasi gagal.', errors });
     }
-    console.error('Error creating addon:', error);
-    res.status(500).json({ message: 'Kesalahan server saat membuat addon', error: error.message });
+    console.error('Kesalahan saat membuat addon:', error);
+    res.status(500).json({ message: 'Kesalahan server saat membuat addon.', error: error.message });
   }
 };
 
@@ -80,7 +86,7 @@ export const createAddon = async (req, res) => {
 // @access  Public
 export const getAddons = async (req, res) => {
   try {
-    const filter = { isDeleted: false }; // Default: get non-deleted addons
+    const filter = { isDeleted: false };
     if (req.query.isActive !== undefined) {
       filter.isActive = req.query.isActive === 'true';
     }
@@ -93,20 +99,17 @@ export const getAddons = async (req, res) => {
 
     const query = Addon.find(filter).sort({ createdAt: -1 });
 
-    // Populate ingredients if requested or always
+    // NEW: Populate recipe ingredients if the Addon model includes a recipe field and it's requested
     const populateFields = req.query.populate;
-    if (populateFields && populateFields.includes('ingredients')) {
-      query.populate('ingredients.ingredientId', 'name unit'); // Only fetch 'name' and 'unit' of ingredient
-    } else {
-        // Default to populate ingredients if no populate param
-        query.populate('ingredients.ingredientId', 'name unit');
+    if (populateFields && populateFields.includes('recipe')) {
+        query.populate('recipe.ingredientId', 'name unit price');
     }
 
     const addons = await query.exec();
     res.status(200).json(addons.map(addon => addon.toJSON()));
   } catch (error) {
-    console.error('Error getting addons:', error);
-    res.status(500).json({ message: 'Kesalahan server saat mendapatkan addon', error: error.message });
+    console.error('Kesalahan saat mengambil addons:', error);
+    res.status(500).json({ message: 'Kesalahan server saat mengambil addons.', error: error.message });
   }
 };
 
@@ -121,15 +124,15 @@ export const getAddonById = async (req, res) => {
     }
 
     const addon = await Addon.findById(id)
-                              .populate('ingredients.ingredientId', 'name unit'); // Populate ingredients
+                             .populate('recipe.ingredientId', 'name unit price'); // NEW: Populate recipe if it exists;
 
     if (!addon || addon.isDeleted === true) {
-      return res.status(404).json({ message: 'Addon tidak ditemukan atau sudah dihapus' });
+      return res.status(404).json({ message: 'Addon tidak ditemukan atau sudah dihapus.' });
     }
     res.status(200).json(addon.toJSON());
   } catch (error) {
-    console.error('Error getting addon by ID:', error);
-    res.status(500).json({ message: 'Kesalahan server saat mendapatkan addon', error: error.message });
+    console.error('Kesalahan saat mengambil addon berdasarkan ID:', error);
+    res.status(500).json({ message: 'Kesalahan server saat mengambil addon.', error: error.message });
   }
 };
 
@@ -145,7 +148,6 @@ export const updateAddon = async (req, res) => {
       return res.status(400).json({ message: 'Format ID Addon tidak valid.' });
     }
 
-    // --- Controller-side Validation for Update ---
     const errors = [];
     if (updateData.name !== undefined && (typeof updateData.name !== 'string' || updateData.name.trim() === '')) {
       errors.push('Nama harus berupa string non-kosong jika disediakan.');
@@ -156,39 +158,42 @@ export const updateAddon = async (req, res) => {
     if (updateData.price !== undefined && (typeof updateData.price !== 'number' || updateData.price < 0)) {
       errors.push('Harga harus berupa angka non-negatif jika disediakan.');
     }
-    if (updateData.ingredients !== undefined) {
-      if (!Array.isArray(updateData.ingredients)) {
-        errors.push('Bahan-bahan harus berupa array jika disediakan.');
-      } else {
-        for (let i = 0; i < updateData.ingredients.length; i++) {
-          const item = updateData.ingredients[i];
-          if (!item.ingredientId || !mongoose.Types.ObjectId.isValid(item.ingredientId)) {
-            errors.push(`Bahan pada indeks ${i} memiliki ingredientId yang tidak valid.`);
-          } else {
-            const existingIngredient = await Ingredient.findById(item.ingredientId);
-            if (!existingIngredient || existingIngredient.isDeleted || !existingIngredient.isActive) {
-              errors.push(`ID Bahan '${item.ingredientId}' pada indeks ${i} tidak ada, sudah dihapus, atau tidak aktif.`);
-            }
-          }
-          if (item.qty === undefined || typeof item.qty !== 'number' || item.qty <= 0) {
-            errors.push(`Kuantitas untuk bahan pada indeks ${i} wajib diisi dan harus berupa angka positif.`);
-          }
-        }
-      }
-    }
-    if (updateData.imgUrl !== undefined && typeof updateData.imgUrl !== 'string') {
-        errors.push('imgUrl harus berupa string.');
-    } else if (updateData.imgUrl !== undefined) {
-        updateData.imgUrl = updateData.imgUrl.trim();
-    }
     if (updateData.isActive !== undefined && typeof updateData.isActive !== 'boolean') {
       errors.push('isActive harus berupa boolean jika disediakan.');
     }
 
-    if (errors.length > 0) {
-      return res.status(400).json({ message: 'Validasi gagal', errors });
+    // NEW: Validate recipe ingredients on Update
+    if (updateData.recipe !== undefined) {
+      const processedRecipe = [];
+      if (!Array.isArray(updateData.recipe)) {
+        errors.push('Resep harus berupa array.');
+      } else {
+        for (let i = 0; i < updateData.recipe.length; i++) {
+          const item = updateData.recipe[i];
+          if (!item.ingredientId || !mongoose.Types.ObjectId.isValid(item.ingredientId)) {
+            errors.push(`Resep di indeks ${i} memiliki ID bahan tidak valid.`);
+            continue;
+          }
+          const existingIngredient = await Ingredient.findById(item.ingredientId);
+          if (!existingIngredient || existingIngredient.isDeleted || !existingIngredient.isActive) {
+            errors.push(`Bahan dengan ID '${item.ingredientId}' di indeks resep ${i} tidak ditemukan, sudah dihapus, atau tidak aktif.`);
+          }
+          if (item.qty === undefined || typeof item.qty !== 'number' || item.qty < 0) {
+            errors.push(`Jumlah bahan di indeks resep ${i} diperlukan dan harus berupa angka non-negatif.`);
+          }
+          processedRecipe.push({
+            ingredientId: item.ingredientId,
+            qty: item.qty
+          });
+        }
+      }
+      updateData.recipe = processedRecipe; // Replace with validated/processed recipe
     }
-    // --- End Controller-side Validation ---
+
+
+    if (errors.length > 0) {
+      return res.status(400).json({ message: 'Validasi gagal.', errors });
+    }
 
     const addon = await Addon.findByIdAndUpdate(
       id,
@@ -197,28 +202,28 @@ export const updateAddon = async (req, res) => {
     );
 
     if (!addon) {
-      return res.status(404).json({ message: 'Addon tidak ditemukan' });
+      return res.status(404).json({ message: 'Addon tidak ditemukan.' });
     }
 
     res.status(200).json({
-      message: 'Addon berhasil diperbarui',
+      message: 'Addon berhasil diperbarui.',
       addon: addon.toJSON()
     });
   } catch (error) {
     if (error.name === 'CastError' && error.kind === 'ObjectId') {
         return res.status(400).json({ message: 'Format ID Addon tidak valid.' });
     }
-    if (error.code === 11000) { // Duplicate key error for 'name'
+    if (error.code === 11000) { // Duplicate key error for 'code' or 'name'
       const field = Object.keys(error.keyValue)[0];
       const value = error.keyValue[field];
-      return res.status(409).json({ message: `Addon dengan ${field} '${value}' ini sudah ada.` });
+      return res.status(409).json({ message: `Addon dengan ${field} '${value}' sudah ada.` });
     }
     if (error.name === 'ValidationError') {
       const errors = Object.keys(error.errors).map(key => error.errors[key].message);
-      return res.status(400).json({ message: 'Validasi gagal', errors });
+      return res.status(400).json({ message: 'Validasi gagal.', errors });
     }
-    console.error('Error updating addon:', error);
-    res.status(500).json({ message: 'Kesalahan server saat memperbarui addon', error: error.message });
+    console.error('Kesalahan saat memperbarui addon:', error);
+    res.status(500).json({ message: 'Kesalahan server saat memperbarui addon.', error: error.message });
   }
 };
 
@@ -239,18 +244,18 @@ export const deleteAddon = async (req, res) => {
     );
 
     if (!addon) {
-      return res.status(404).json({ message: 'Addon tidak ditemukan' });
+      return res.status(404).json({ message: 'Addon tidak ditemukan.' });
     }
 
     res.status(200).json({
-      message: 'Addon berhasil dihapus secara lunak',
+      message: 'Addon berhasil dihapus (soft delete).',
       addon: addon.toJSON()
     });
   } catch (error) {
     if (error.name === 'CastError' && error.kind === 'ObjectId') {
         return res.status(400).json({ message: 'Format ID Addon tidak valid.' });
     }
-    console.error('Error soft deleting addon:', error);
-    res.status(500).json({ message: 'Kesalahan server saat menghapus addon secara lunak', error: error.message });
+    console.error('Kesalahan saat menghapus addon:', error);
+    res.status(500).json({ message: 'Kesalahan server saat menghapus addon.', error: error.message });
   }
 };

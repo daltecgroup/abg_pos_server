@@ -20,19 +20,13 @@ const AddonSchema = new Schema({
     required: true,
     min: 0,
   },
-  ingredients: [ // Array of ingredient sub-documents (similar to Menu)
+  // If addons also have ingredients (like a topping requiring specific ingredients),
+  // you might add a 'recipe' field similar to the Menu model:
+  recipe: [
     {
-      ingredientId: {
-        type: Schema.Types.ObjectId,
-        ref: 'Ingredient', // Reference to Ingredient model
-        required: true,
-      },
-      qty: {
-        type: Number,
-        required: true,
-        min: 0,
-      },
-      _id: false // Prevents Mongoose from adding an _id to each subdocument in the array
+      ingredientId: { type: Schema.Types.ObjectId, ref: 'Ingredient', required: true },
+      qty: { type: Number, required: true, min: 0 },
+      _id: false
     }
   ],
   imgUrl: {

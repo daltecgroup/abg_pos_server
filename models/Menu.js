@@ -6,7 +6,8 @@ const MenuSchema = new Schema({
     type: String,
     trim: true,
     uppercase: true,
-    index: true, // Index for fast lookup by code
+    index: true,
+    unique: true, // Menu code must be unique
   },
   name: {
     type: String,
@@ -15,48 +16,43 @@ const MenuSchema = new Schema({
     trim: true,
     index: true, // Index for searching/sorting by name
   },
-  price: {
-    type: Number,
+  menuCategoryId: {
+    type: Schema.Types.ObjectId,
+    ref: 'MenuCategory', // Reference to MenuCategory model
     required: true,
-    min: 0,
-  },
-  discount: { // Percentage discount (0-100)
-    type: Number,
-    min: 0,
-    max: 100,
-    default: 0,
+    index: true,
   },
   description: {
     type: String,
     trim: true,
     default: null,
   },
-  imgUrl: {
-    type: String,
-    trim: true,
-    default: null,
-  },
-  category: {
-    type: Schema.Types.ObjectId,
-    ref: 'MenuCategory', // Reference to MenuCategory model
+  price: {
+    type: Number,
     required: true,
-    index: true, // Index for filtering by category
+    min: 0,
   },
-  ingredients: [ // Array of ingredient sub-documents
+  // NEW: recipe field for ingredients used in this menu
+  recipe: [
     {
       ingredientId: {
         type: Schema.Types.ObjectId,
-        ref: 'Ingredient', // Reference to Ingredient model
+        ref: 'Ingredient',
         required: true,
       },
-      qty: {
+      qty: { // Quantity of this ingredient needed for ONE unit of this menu
         type: Number,
         required: true,
         min: 0,
       },
-      _id: false // Prevents Mongoose from adding an _id to each subdocument in the array
+      _id: false // Prevents Mongoose from adding an _id to recipe subdocuments
     }
   ],
+  image: { // URL to the menu image
+    type: String,
+    trim: true,
+    default: null,
+  },
   isActive: {
     type: Boolean,
     default: true,
@@ -73,7 +69,7 @@ const MenuSchema = new Schema({
   },
   deletedBy: {
     type: Schema.Types.ObjectId,
-    ref: 'User', // Reference to User model (if you implement UserSchema)
+    ref: 'User',
     default: null,
   },
 }, {
