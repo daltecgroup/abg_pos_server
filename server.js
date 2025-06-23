@@ -70,5 +70,5 @@ app.get('/api/v1', (req, res) => {
   res.send('API is running...');
 });
 
-const PORT = process.env.PORT || 8001;
+const PORT = process.env.PORT || 8001; // 8000 is the main port
 server.listen(PORT, '0.0.0.0', () => console.log(`Server running on port ${PORT}`));

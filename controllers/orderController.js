@@ -208,11 +208,12 @@ export const getOrderById = async (req, res) => {
 // @route   PATCH /api/v1/orders/:id
 // @access  Private (Admin, SPV Area for accepting items)
 export const updateOrder = async (req, res) => {
+  // Moved createdInventoryTransactionId declaration outside the try block
+  let createdInventoryTransactionId = null; // To store the ID of the new OIT for potential rollback
   try {
     const { id } = req.params;
     const { status, items } = req.body; // Items here are the ingredient items being updated
     const errors = [];
-    let createdInventoryTransactionId = null; // To store the ID of the new OIT for potential rollback
 
     if (!mongoose.Types.ObjectId.isValid(id)) {
       return res.status(400).json({ message: 'Format ID Pesanan tidak valid.' });
