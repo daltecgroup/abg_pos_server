@@ -6,6 +6,7 @@ import cors from 'cors';
 import connectDB from './config/db.js';
 
 // import custom modules
+import addressRoutes from './routes/addressRoutes.js';
 import authRoutes from './routes/authRoutes.js';
 import userRoutes from './routes/userRoutes.js';
 import ingredientRoutes from './routes/ingredientRoutes.js';
@@ -43,6 +44,7 @@ app.use(logger);
 app.use('/uploads/attendance/evidence', express.static('uploads')); // MODIFIED: Path changed
 
 // Routes
+app.use('/api/v1/address', addressRoutes);
 app.use('/api/v1/auth', authRoutes);
 app.use('/api/v1/users', userRoutes);
 app.use('/api/v1/ingredients', ingredientRoutes);
