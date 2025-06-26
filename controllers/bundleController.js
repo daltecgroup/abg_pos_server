@@ -1,11 +1,13 @@
 import Bundle from '../models/Bundle.js'; // Import the Bundle model
 import MenuCategory from '../models/MenuCategory.js'; // Import for category validation
 import mongoose from 'mongoose'; // For ObjectId validation
+import * as productCompositionService from '../services/productCompositionService.js'; // NEW: Import the new service
+
 
 // --- CRUD Controller Functions for Bundle ---
 
 // @desc    Create a new bundle
-// @route   POST /api/v1/bundles
+// @route   POST /api/bundles
 // @access  Public (in a real app, typically Private/Admin and authenticated)
 export const createBundle = async (req, res) => {
   try {
@@ -20,27 +22,18 @@ export const createBundle = async (req, res) => {
     if (price === undefined || typeof price !== 'number' || price < 0) {
       errors.push('Harga paket diperlukan dan harus berupa angka non-negatif.');
     }
-    if (!categories || !Array.isArray(categories) || categories.length === 0) {
-      errors.push('Kategori paket diperlukan dan harus berupa array dengan setidaknya satu item.');
-    } else {
-      // Validate each category item in the array
-      for (let i = 0; i < categories.length; i++) {
-        const item = categories[i];
-        if (!item.menuCategoryId || !mongoose.Types.ObjectId.isValid(item.menuCategoryId)) {
-          errors.push(`Kategori di indeks ${i} memiliki ID kategori menu tidak valid.`);
-          continue;
-        } else {
-          // Check if category actually exists and is active
-          const existingCategory = await MenuCategory.findById(item.menuCategoryId);
-          if (!existingCategory || existingCategory.isDeleted || !existingCategory.isActive) {
-            errors.push(`ID Kategori Menu '${item.menuCategoryId}' di indeks ${i} tidak ditemukan, sudah dihapus, atau tidak aktif.`);
-          }
-        }
-        if (item.qty === undefined || typeof item.qty !== 'number' || item.qty < 1) {
-          errors.push(`Jumlah untuk kategori di indeks ${i} diperlukan dan harus berupa angka positif (minimal 1).`);
-        }
+
+    // NEW: Use productCompositionService to validate categories
+    if (categories !== undefined) {
+      const processedCategories = await productCompositionService.validateBundleCategoriesArray(categories, errors);
+      if (processedCategories) {
+        req.body.categories = processedCategories; // Replace with validated/processed categories
+      } else {
+        // Errors were pushed to the 'errors' array by the service function
       }
     }
+
+
     if (description !== undefined && typeof description !== 'string') {
         errors.push('Deskripsi harus berupa string.');
     } else if (description !== undefined) {
@@ -79,7 +72,7 @@ export const createBundle = async (req, res) => {
 };
 
 // @desc    Get all bundles
-// @route   GET /api/v1/bundles
+// @route   GET /api/bundles
 // @access  Public
 export const getBundles = async (req, res) => {
   try {
@@ -93,14 +86,14 @@ export const getBundles = async (req, res) => {
     if (req.query.code) {
       filter.code = { $regex: req.query.code, $options: 'i' };
     }
-    // You might add filtering by category IDs if needed (e.g., /api/v1/bundles?categoryId=id1)
+    // You might add filtering by category IDs if needed (e.g., /api/bundles?categoryId=id1)
 
     const query = Bundle.find(filter).sort({ createdAt: -1 });
 
     // Populate categories if requested or always
     const populateFields = req.query.populate;
-    if (populateFields && populateFields.includes('categories')) {
-      query.populate('categories.menuCategoryId', 'name'); // Only fetch 'name' field of menu category
+    if (populateFields) {
+        if (populateFields.includes('categories')) query.populate('categories.menuCategoryId', 'name'); // Only fetch 'name' field of menu category
     } else {
         // Default to populate categories
         query.populate('categories.menuCategoryId', 'name');
@@ -115,7 +108,7 @@ export const getBundles = async (req, res) => {
 };
 
 // @desc    Get a single bundle by ID
-// @route   GET /api/v1/bundles/:id
+// @route   GET /api/bundles/:id
 // @access  Public
 export const getBundleById = async (req, res) => {
   try {
@@ -133,12 +126,12 @@ export const getBundleById = async (req, res) => {
     res.status(200).json(bundle.toJSON());
   } catch (error) {
     console.error('Kesalahan saat mengambil paket berdasarkan ID:', error);
-    res.status(500).json({ message: 'Kesalahan server saat mengambil paket.', error: error.message });
+    res.status(500).json({ message: 'Kesalahan server saat mengambil paket berdasarkan ID.', error: error.message });
   }
 };
 
 // @desc    Update a bundle by ID
-// @route   PUT /api/v1/bundles/:id
+// @route   PUT /api/bundles/:id
 // @access  Public (in a real app, typically Private/Admin and authenticated)
 export const updateBundle = async (req, res) => {
   try {
@@ -161,24 +154,11 @@ export const updateBundle = async (req, res) => {
       errors.push('Harga harus berupa angka non-negatif jika disediakan.');
     }
     if (updateData.categories !== undefined) {
-      if (!Array.isArray(updateData.categories) || updateData.categories.length === 0) {
-        errors.push('Kategori harus berupa array dengan setidaknya satu item jika disediakan.');
+      const processedCategories = await productCompositionService.validateBundleCategoriesArray(updateData.categories, errors);
+      if (processedCategories) {
+        updateData.categories = processedCategories; // Replace with validated/processed categories
       } else {
-        for (let i = 0; i < updateData.categories.length; i++) {
-          const item = updateData.categories[i];
-          if (!item.menuCategoryId || !mongoose.Types.ObjectId.isValid(item.menuCategoryId)) {
-            errors.push(`Kategori di indeks ${i} memiliki ID kategori menu tidak valid.`);
-            continue;
-          } else {
-            const existingCategory = await MenuCategory.findById(item.menuCategoryId);
-            if (!existingCategory || existingCategory.isDeleted || !existingCategory.isActive) {
-              errors.push(`ID Kategori Menu '${item.menuCategoryId}' di indeks ${i} tidak ditemukan, sudah dihapus, atau tidak aktif.`);
-            }
-          }
-          if (item.qty === undefined || typeof item.qty !== 'number' || item.qty < 1) {
-            errors.push(`Jumlah untuk kategori di indeks ${i} diperlukan dan harus berupa angka positif (minimal 1).`);
-          }
-        }
+        // Errors were pushed to the 'errors' array by the service function
       }
     }
     if (updateData.description !== undefined && typeof updateData.description !== 'string') {
@@ -228,7 +208,7 @@ export const updateBundle = async (req, res) => {
 };
 
 // @desc    Soft delete a bundle by ID
-// @route   DELETE /api/v1/bundles/:id
+// @route   DELETE /api/bundles/:id
 // @access  Public (in a real app, typically Private/Admin and authenticated)
 export const deleteBundle = async (req, res) => {
   try {

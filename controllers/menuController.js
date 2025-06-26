@@ -4,6 +4,7 @@ import Menu from '../models/Menu.js';
 import MenuCategory from '../models/MenuCategory.js'; // For category validation
 import Ingredient from '../models/Ingredient.js'; // NEW: For ingredient validation in recipe
 import mongoose from 'mongoose'; // For ObjectId validation
+import * as productCompositionService from '../services/productCompositionService.js'; // NEW: Import the new service
 
 // --- CRUD Controller Functions for Menu ---
 
@@ -32,47 +33,28 @@ export const createMenu = async (req, res) => {
       errors.push('Harga menu diperlukan dan harus berupa angka non-negatif.');
     }
     if (description !== undefined && typeof description !== 'string') {
-        errors.push('Deskripsi harus berupa string.');
+      errors.push('Deskripsi harus berupa string.');
     } else if (description !== undefined) {
-        req.body.description = description.trim();
+      req.body.description = description.trim();
     }
     if (image !== undefined && typeof image !== 'string') {
-        errors.push('URL gambar harus berupa string.');
+      errors.push('URL gambar harus berupa string.');
     } else if (image !== undefined) {
-        req.body.image = image.trim();
+      req.body.image = image.trim();
     }
     if (isActive !== undefined && typeof isActive !== 'boolean') {
       errors.push('isActive harus berupa boolean jika disediakan.');
     }
 
-    // NEW: Validate recipe ingredients
-    const processedRecipe = [];
+    // NEW: Use productCompositionService to validate recipe
     if (recipe !== undefined) {
-      if (!Array.isArray(recipe)) {
-        errors.push('Resep harus berupa array.');
+      const processedRecipe = await productCompositionService.validateRecipeArray(recipe, errors);
+      if (processedRecipe) {
+        req.body.recipe = processedRecipe; // Replace with validated/processed recipe
       } else {
-        for (let i = 0; i < recipe.length; i++) {
-          const item = recipe[i];
-          if (!item.ingredientId || !mongoose.Types.ObjectId.isValid(item.ingredientId)) {
-            errors.push(`Resep di indeks ${i} memiliki ID bahan tidak valid.`);
-            continue;
-          }
-          const existingIngredient = await Ingredient.findById(item.ingredientId);
-          if (!existingIngredient || existingIngredient.isDeleted || !existingIngredient.isActive) {
-            errors.push(`Bahan dengan ID '${item.ingredientId}' di indeks resep ${i} tidak ditemukan, sudah dihapus, atau tidak aktif.`);
-          }
-          if (item.qty === undefined || typeof item.qty !== 'number' || item.qty < 0) {
-            errors.push(`Jumlah bahan di indeks resep ${i} diperlukan dan harus berupa angka non-negatif.`);
-          }
-          processedRecipe.push({
-            ingredientId: item.ingredientId,
-            qty: item.qty
-          });
-        }
+        // Errors were pushed to the 'errors' array by the service function
       }
-      req.body.recipe = processedRecipe; // Replace with validated/processed recipe
     }
-
 
     if (errors.length > 0) {
       return res.status(400).json({ message: 'Validasi gagal.', errors });
@@ -132,8 +114,8 @@ export const getMenus = async (req, res) => {
       if (populateFields.includes('menuCategoryId')) query.populate('menuCategoryId', 'name');
       if (populateFields.includes('recipe')) query.populate('recipe.ingredientId', 'name unit price'); // Populate ingredient details for recipe
     } else {
-        // Default populate commonly needed fields
-        query.populate('menuCategoryId', 'name');
+      // Default populate commonly needed fields
+      query.populate('menuCategoryId', 'name');
     }
 
 
@@ -156,8 +138,8 @@ export const getMenuById = async (req, res) => {
     }
 
     const menu = await Menu.findById(id)
-                          .populate('menuCategoryId', 'name')
-                          .populate('recipe.ingredientId', 'name unit price'); // Populate ingredient details for recipe;
+      .populate('menuCategoryId', 'name')
+      .populate('recipe.ingredientId', 'name unit price'); // Populate ingredient details for recipe;
 
     if (!menu || menu.isDeleted === true) {
       return res.status(404).json({ message: 'Menu tidak ditemukan atau sudah dihapus.' });
@@ -203,45 +185,27 @@ export const updateMenu = async (req, res) => {
       errors.push('Harga harus berupa angka non-negatif jika disediakan.');
     }
     if (updateData.description !== undefined && typeof updateData.description !== 'string') {
-        errors.push('Deskripsi harus berupa string.');
+      errors.push('Deskripsi harus berupa string.');
     } else if (updateData.description !== undefined) {
-        updateData.description = updateData.description.trim();
+      updateData.description = updateData.description.trim();
     }
     if (updateData.image !== undefined && typeof updateData.image !== 'string') {
-        errors.push('URL gambar harus berupa string.');
+      errors.push('URL gambar harus berupa string.');
     } else if (updateData.image !== undefined) {
-        updateData.image = updateData.image.trim();
+      updateData.image = updateData.image.trim();
     }
     if (updateData.isActive !== undefined && typeof updateData.isActive !== 'boolean') {
       errors.push('isActive harus berupa boolean jika disediakan.');
     }
 
-    // NEW: Validate recipe ingredients for update
+    // NEW: Use productCompositionService to validate recipe ingredients for update
     if (updateData.recipe !== undefined) {
-      const processedRecipe = [];
-      if (!Array.isArray(updateData.recipe)) {
-        errors.push('Resep harus berupa array.');
+      const processedRecipe = await productCompositionService.validateRecipeArray(updateData.recipe, errors);
+      if (processedRecipe) {
+        updateData.recipe = processedRecipe; // Replace with validated/processed recipe
       } else {
-        for (let i = 0; i < updateData.recipe.length; i++) {
-          const item = updateData.recipe[i];
-          if (!item.ingredientId || !mongoose.Types.ObjectId.isValid(item.ingredientId)) {
-            errors.push(`Resep di indeks ${i} memiliki ID bahan tidak valid.`);
-            continue;
-          }
-          const existingIngredient = await Ingredient.findById(item.ingredientId);
-          if (!existingIngredient || existingIngredient.isDeleted || !existingIngredient.isActive) {
-            errors.push(`Bahan dengan ID '${item.ingredientId}' di indeks resep ${i} tidak ditemukan, sudah dihapus, atau tidak aktif.`);
-          }
-          if (item.qty === undefined || typeof item.qty !== 'number' || item.qty < 0) {
-            errors.push(`Jumlah bahan di indeks resep ${i} diperlukan dan harus berupa angka non-negatif.`);
-          }
-          processedRecipe.push({
-            ingredientId: item.ingredientId,
-            qty: item.qty
-          });
-        }
+        // Errors were pushed to the 'errors' array by the service function
       }
-      updateData.recipe = processedRecipe; // Replace with validated/processed recipe
     }
 
 
@@ -266,7 +230,7 @@ export const updateMenu = async (req, res) => {
     });
   } catch (error) {
     if (error.name === 'CastError' && error.kind === 'ObjectId') {
-        return res.status(400).json({ message: 'Format ID Menu tidak valid.' });
+      return res.status(400).json({ message: 'Format ID Menu tidak valid.' });
     }
     if (error.code === 11000) { // Duplicate key error for 'code' or 'name'
       const field = Object.keys(error.keyValue)[0];
@@ -308,7 +272,7 @@ export const deleteMenu = async (req, res) => {
     });
   } catch (error) {
     if (error.name === 'CastError' && error.kind === 'ObjectId') {
-        return res.status(400).json({ message: 'Format ID Menu tidak valid.' });
+      return res.status(400).json({ message: 'Format ID Menu tidak valid.' });
     }
     console.error('Kesalahan saat menghapus menu:', error);
     res.status(500).json({ message: 'Kesalahan server saat menghapus menu.', error: error.message });

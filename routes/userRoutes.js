@@ -14,7 +14,7 @@ router.route('/sync')
   .post(protect, authorizeRoles(Roles.admin), controller.syncUsers);
 
 router.route('/:id')
-  .get(protect, controller.getUsersById)
+  .get(protect, controller.getUserById)
   .put(protect, authorizeRoles(Roles.admin), controller.updateUserById)
   .delete(protect, authorizeRoles(Roles.admin), controller.softDeleteUserById);
 

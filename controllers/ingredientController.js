@@ -44,17 +44,17 @@ export const createIngredient = async (req, res) => {
 // @access  Public
 export const getIngredients = async (req, res) => {
   try {
-    const filter = { isDeleted: false };
+    let filter = { isDeleted: false };
     if (req.query.isActive !== undefined) {
-      filter.isActive = req.query.isActive === 'true';
-    }
+      filter.isActive = req.query.isActive;
+    } 
     if (req.query.name) {
       filter.name = { $regex: req.query.name, $options: 'i' };
     }
     if (req.query.code) {
       filter.code = { $regex: req.query.code, $options: 'i' };
     }
-    const ingredients = await Ingredient.find(filter).sort({ createdAt: -1 });
+    const ingredients = await Ingredient.find(filter).sort({ name: 'asc' });
     res.status(200).json(ingredients.map(ing => ing.toJSON()));
   } catch (error) {
     console.error('Error getting ingredients:', error);
@@ -178,9 +178,7 @@ export const getIngredientHistory = async (req, res) => {
 
     // Find history records for the given ingredientId, sorted by creation date
     const history = await IngredientHistory.find({ ingredientId: id })
-                                         .sort({ createdAt: 1 }) // Ascending order to see history unfold
-                                         .populate('createdBy.userId', 'name'); // Populate user details if needed
-
+                                         .sort({ createdAt: -1 }); // Ascending order to see history unfold
     res.status(200).json(history.map(item => item.toJSON()));
   } catch (error) {
     console.error('Error fetching ingredient history:', error);

@@ -1,6 +1,7 @@
 import Addon from '../models/Addon.js';
 import mongoose from 'mongoose'; // For ObjectId validation
 import Ingredient from '../models/Ingredient.js'; // Needed for ingredient validation in recipe
+import * as productCompositionService from '../services/productCompositionService.js'; // NEW: Import the new service
 
 // --- CRUD Controller Functions for Addon ---
 
@@ -24,33 +25,14 @@ export const createAddon = async (req, res) => {
       errors.push('isActive harus berupa boolean jika disediakan.');
     }
 
-    // NEW: Validate recipe ingredients
-    const processedRecipe = [];
+    // NEW: Use productCompositionService to validate recipe ingredients
     if (recipe !== undefined) {
-      if (!Array.isArray(recipe)) {
-        errors.push('Resep harus berupa array.');
+      const processedRecipe = await productCompositionService.validateRecipeArray(recipe, errors);
+      if (processedRecipe) {
+        req.body.recipe = processedRecipe; // Replace with validated/processed recipe
       } else {
-        for (let i = 0; i < recipe.length; i++) {
-          const item = recipe[i];
-          if (!item.ingredientId || !mongoose.Types.ObjectId.isValid(item.ingredientId)) {
-            errors.push(`Resep di indeks ${i} memiliki ID bahan tidak valid.`);
-            continue;
-          }
-          // Assuming Ingredient model and isActive/isDeleted status
-          const existingIngredient = await Ingredient.findById(item.ingredientId);
-          if (!existingIngredient || existingIngredient.isDeleted || !existingIngredient.isActive) {
-            errors.push(`Bahan dengan ID '${item.ingredientId}' di indeks resep ${i} tidak ditemukan, sudah dihapus, atau tidak aktif.`);
-          }
-          if (item.qty === undefined || typeof item.qty !== 'number' || item.qty < 0) {
-            errors.push(`Jumlah bahan di indeks resep ${i} diperlukan dan harus berupa angka non-negatif.`);
-          }
-          processedRecipe.push({
-            ingredientId: item.ingredientId,
-            qty: item.qty
-          });
-        }
+        // Errors were pushed to the 'errors' array by the service function
       }
-      req.body.recipe = processedRecipe; // Replace with validated/processed recipe
     }
 
 
@@ -99,7 +81,7 @@ export const getAddons = async (req, res) => {
 
     const query = Addon.find(filter).sort({ createdAt: -1 });
 
-    // NEW: Populate recipe ingredients if the Addon model includes a recipe field and it's requested
+    // Populate recipe ingredients if the Addon model includes a recipe field and it's requested
     const populateFields = req.query.populate;
     if (populateFields && populateFields.includes('recipe')) {
         query.populate('recipe.ingredientId', 'name unit price');
@@ -162,32 +144,14 @@ export const updateAddon = async (req, res) => {
       errors.push('isActive harus berupa boolean jika disediakan.');
     }
 
-    // NEW: Validate recipe ingredients on Update
+    // NEW: Use productCompositionService to validate recipe ingredients on Update
     if (updateData.recipe !== undefined) {
-      const processedRecipe = [];
-      if (!Array.isArray(updateData.recipe)) {
-        errors.push('Resep harus berupa array.');
+      const processedRecipe = await productCompositionService.validateRecipeArray(updateData.recipe, errors);
+      if (processedRecipe) {
+        updateData.recipe = processedRecipe; // Replace with validated/processed recipe
       } else {
-        for (let i = 0; i < updateData.recipe.length; i++) {
-          const item = updateData.recipe[i];
-          if (!item.ingredientId || !mongoose.Types.ObjectId.isValid(item.ingredientId)) {
-            errors.push(`Resep di indeks ${i} memiliki ID bahan tidak valid.`);
-            continue;
-          }
-          const existingIngredient = await Ingredient.findById(item.ingredientId);
-          if (!existingIngredient || existingIngredient.isDeleted || !existingIngredient.isActive) {
-            errors.push(`Bahan dengan ID '${item.ingredientId}' di indeks resep ${i} tidak ditemukan, sudah dihapus, atau tidak aktif.`);
-          }
-          if (item.qty === undefined || typeof item.qty !== 'number' || item.qty < 0) {
-            errors.push(`Jumlah bahan di indeks resep ${i} diperlukan dan harus berupa angka non-negatif.`);
-          }
-          processedRecipe.push({
-            ingredientId: item.ingredientId,
-            qty: item.qty
-          });
-        }
+        // Errors were pushed to the 'errors' array by the service function
       }
-      updateData.recipe = processedRecipe; // Replace with validated/processed recipe
     }
 
 

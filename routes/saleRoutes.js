@@ -1,10 +1,12 @@
 import express from 'express';
-import * as saleController from '../controllers/saleController.js';
+import * as controller from '../controllers/saleController.js';
 import multer from 'multer'; // For handling file uploads (payment evidence)
 import path from 'path';
 import sharp from 'sharp';
 import fs from 'fs/promises';
 import protect from '../middleware/auth.js';
+import authorizeRoles from '../middleware/rbac.js';
+import { Roles } from '../constants/roles.js';
 
 const router = express.Router();
 
@@ -91,22 +93,20 @@ const processAndSavePaymentEvidence = async (req, res, next) => {
 
 // --- Sale Routes ---
 router.route('/')
-  // Create a new sale
   // POST /api/sales (Expects 'paymentEvidence' as the field name for the file if payment method requires it)
-  .post(protect, upload.single('paymentEvidence'), processAndSavePaymentEvidence, saleController.createSale)
-  // Get all sales
+  .post(protect, upload.single('paymentEvidence'), processAndSavePaymentEvidence, controller.createSale)
   // GET /api/sales?outletId=...&operatorId=...&dateFrom=...&dateTo=...&isValid=...&paymentMethod=...
-  .get(saleController.getSales);
+  .get(protect, controller.getSales);
 
 router.route('/:id')
-  // Get a single sale by ID
   // GET /api/sales/:id
-  .get(saleController.getSaleById)
+  // GET /api/sales/:id
+  .get(protect, controller.getSaleById)
   // Update a sale (e.g., isValid, add invoicePrintHistory)
   // PATCH /api/sales/:id
-  .patch(saleController.updateSale) // Use PATCH for partial updates
+  .patch(protect, authorizeRoles(Roles.admin, Roles.operator), controller.updateSale)
   // Soft delete a sale (Admin only)
   // DELETE /api/sales/:id
-  .delete(saleController.deleteSale);
+  .delete(protect, authorizeRoles(Roles.admin), controller.deleteSale);
 
 export default router;

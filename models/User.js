@@ -1,5 +1,6 @@
 import { Schema, model } from 'mongoose';
 import { Roles } from '../constants/roles.js';
+import jwt from 'jsonwebtoken'; // For JWT generation
 import bcrypt from 'bcrypt';
 
 const hashPasword = async (password) => {
@@ -95,6 +96,13 @@ UserSchema.pre('findOneAndUpdate', async function(next) {
 // Method to compare passwords
 UserSchema.methods.matchPassword = async function(enteredPassword) {
   return await bcrypt.compare(enteredPassword, this.password);
+};
+
+// --- Method to generate and return JWT token ---
+UserSchema.methods.getSignedJwtToken = function () {
+  return jwt.sign({ id: this._id, roles: this.roles }, process.env.JWT_SECRET, {
+    expiresIn: process.env.JWT_EXPIRES_IN,
+  });
 };
 
 export default model('User', UserSchema);

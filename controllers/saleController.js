@@ -1,18 +1,14 @@
 import Sale from '../models/Sale.js';
 import Outlet from '../models/Outlet.js';
 import User from '../models/User.js';
-import Menu from '../models/Menu.js';
-import Addon from '../models/Addon.js';
-import Bundle from '../models/Bundle.js';
-import Ingredient from '../models/Ingredient.js'; // NEW: Import Ingredient model
 import { PaymentMethods } from '../constants/paymentMethods.js';
 import { Roles } from '../constants/roles.js';
 import mongoose from 'mongoose';
 import multer from 'multer'; // Import multer for error handling
+import * as saleProcessingService from '../services/saleProcessingService.js'; // NEW: Import the sale processing service
 
-// --- Helper Functions ---
 
-// Helper to validate User references (Operator, createdBy, invoicePrintHistory.userId)
+// Helper to validate User references (kept here as it's a general controller utility)
 const validateUserReference = async (userId, errorsArray, fieldName, requiredRole = null) => {
   if (!userId || !mongoose.Types.ObjectId.isValid(userId)) {
     errorsArray.push(`ID Pengguna tidak valid untuk ${fieldName}.`);
@@ -30,7 +26,7 @@ const validateUserReference = async (userId, errorsArray, fieldName, requiredRol
   return { userId: user._id, name: user.name }; // Return object with _id and name
 };
 
-// Helper for image upload path for payment evidence
+// Helper for image upload path for payment evidence (kept here as it's related to multer middleware)
 const getPaymentEvidenceUrl = (req) => {
   if (req.file) {
     // Assuming Multer and image processing middleware save to /uploads/payment_evidence
@@ -42,289 +38,18 @@ const getPaymentEvidenceUrl = (req) => {
 // --- CRUD Controller Functions for Sale ---
 
 // @desc    Create a new sale
-// @route   POST /api/v1/sales
+// @route   POST /api/sales
 // @access  Private (Operator role)
 export const createSale = async (req, res) => {
   try {
-    const { outletId, itemSingle, itemBundle, itemPromo, payment } = req.body;
-    let {totalPaid} = req.body;
-    const errors = [];
-    let calculatedTotalPrice = 0;
-    const ingredientsConsumedMap = new Map(); // To aggregate ingredient usage
+    const paymentEvidenceUrl = getPaymentEvidenceUrl(req);
 
-    // --- Validate Outlet ---
-    let outletSnapshot;
-    if (!outletId || !mongoose.Types.ObjectId.isValid(outletId)) {
-      errors.push('ID Outlet tidak valid.');
-    } else {
-      const outlet = await Outlet.findById(outletId);
-      if (!outlet || outlet.isDeleted || !outlet.isActive) {
-        errors.push('Outlet yang disediakan tidak ditemukan, sudah dihapus, atau tidak aktif.');
-      } else {
-        outletSnapshot = {
-          outletId: outlet._id,
-          name: outlet.name,
-          address: outlet.address
-        };
-      }
-    }
-
-    // --- Validate Operator (from req.user) ---
-    let operatorSnapshot;
-    if (!req.user || !req.user._id || !req.user.name) {
-      errors.push('Informasi operator tidak tersedia. Pastikan pengguna terautentikasi.');
-    } else {
-      const user = await validateUserReference(req.user._id, errors, 'operator', Roles.operator);
-      if (user) {
-        operatorSnapshot = { operatorId: user.userId, name: user.name };
-      }
-    }
-
-    // --- Process itemSingle and calculate ingredients used ---
-    const processedItemSingle = [];
-    if (itemSingle && Array.isArray(itemSingle)) {
-      for (const item of itemSingle) {
-        if (!item.menuId || !mongoose.Types.ObjectId.isValid(item.menuId) || item.qty === undefined || item.qty < 1) {
-          errors.push('Item tunggal memiliki format ID menu atau jumlah yang tidak valid.');
-          continue;
-        }
-        const menu = await Menu.findById(item.menuId); // Fetch menu to get its recipe
-        if (!menu || menu.isDeleted || !menu.isActive) {
-          errors.push(`Menu ID '${item.menuId}' di item tunggal tidak ditemukan, sudah dihapus, atau tidak aktif.`);
-          continue;
-        }
-
-        let itemSingleSubtotal = item.qty * menu.price;
-        let itemSingleDiscountAmount = 0;
-
-        if (item.discount !== undefined) {
-          if (typeof item.discount !== 'number' || item.discount < 0 || item.discount > 100) {
-            errors.push(`Diskon untuk menu '${menu.name}' tidak valid.`);
-          } else {
-            itemSingleDiscountAmount = (item.discount / 100) * itemSingleSubtotal;
-            itemSingleSubtotal -= itemSingleDiscountAmount;
-          }
-        } else {
-            item.discount = 0;
-        }
-
-        // Process addons for this single item
-        const processedAddons = [];
-        if (item.addons && Array.isArray(item.addons)) {
-          for (const addonItem of item.addons) {
-            if (!addonItem.addonId || !mongoose.Types.ObjectId.isValid(addonItem.addonId) || addonItem.qty === undefined || addonItem.qty < 1) {
-              errors.push('Addon memiliki format ID addon atau jumlah yang tidak valid.');
-              continue;
-            }
-            const addon = await Addon.findById(addonItem.addonId);
-            if (!addon || addon.isDeleted || !addon.isActive) {
-              errors.push(`Addon ID '${addonItem.addonId}' tidak ditemukan, sudah dihapus, atau tidak aktif.`);
-              continue;
-            }
-            processedAddons.push({
-              addonId: addon._id,
-              name: addon.name,
-              qty: addonItem.qty,
-              price: addon.price,
-            });
-            itemSingleSubtotal += addonItem.qty * addon.price;
-
-            // NEW: Add addon ingredients to ingredientsConsumedMap (if addons have recipes)
-            if (addon.recipe && Array.isArray(addon.recipe)) { // Assuming addons can also have recipes
-              for (const recipeIngredient of addon.recipe) {
-                if (!recipeIngredient.ingredientId || recipeIngredient.qty === undefined || recipeIngredient.qty < 0) continue;
-                const ingredient = await Ingredient.findById(recipeIngredient.ingredientId);
-                const consumedQty = addonItem.qty * recipeIngredient.qty;
-                const consumedExpense = ingredient ? (consumedQty * ingredient.price) : 0;
-                const ingredientName = ingredient ? ingredient.name : null;
-                const ingredientUnit = ingredient ? ingredient.unit : null;
-
-                const current = ingredientsConsumedMap.get(recipeIngredient.ingredientId.toString()) || { qty: 0, expense: 0, name: ingredientName, unit: ingredientUnit };
-                ingredientsConsumedMap.set(recipeIngredient.ingredientId.toString(), {
-                  ingredientId: recipeIngredient.ingredientId,
-                  name: current.name,
-                  qty: current.qty + consumedQty,
-                  expense: current.expense + consumedExpense,
-                  unit: current.unit
-                });
-              }
-            }
-          }
-        }
-
-        processedItemSingle.push({
-          menuId: menu._id,
-          name: menu.name,
-          qty: item.qty,
-          price: menu.price,
-          discount: item.discount,
-          notes: item.notes || null,
-          addons: processedAddons,
-        });
-        calculatedTotalPrice += itemSingleSubtotal;
-
-        // NEW: Add menu ingredients to ingredientsConsumedMap
-        if (menu.recipe && Array.isArray(menu.recipe)) {
-          for (const recipeIngredient of menu.recipe) {
-            if (!recipeIngredient.ingredientId || recipeIngredient.qty === undefined || recipeIngredient.qty < 0) continue;
-            const ingredient = await Ingredient.findById(recipeIngredient.ingredientId);
-            const consumedQty = item.qty * recipeIngredient.qty;
-            const consumedExpense = ingredient ? (consumedQty * ingredient.price) : 0;
-            const ingredientName = ingredient ? ingredient.name : null;
-            const ingredientUnit = ingredient ? ingredient.unit : null;
-
-            const current = ingredientsConsumedMap.get(recipeIngredient.ingredientId.toString()) || { qty: 0, expense: 0, name: ingredientName, unit: ingredientUnit };
-            ingredientsConsumedMap.set(recipeIngredient.ingredientId.toString(), {
-              ingredientId: recipeIngredient.ingredientId,
-              name: current.name,
-              qty: current.qty + consumedQty,
-              expense: current.expense + consumedExpense,
-              unit: current.unit
-            });
-          }
-        }
-      }
-    }
-
-    // --- Process itemBundle and calculate ingredients used ---
-    const processedItemBundle = [];
-    if (itemBundle && Array.isArray(itemBundle)) {
-      for (const bundleItem of itemBundle) {
-        if (!bundleItem.menuBundleId || !mongoose.Types.ObjectId.isValid(bundleItem.menuBundleId) || bundleItem.qty === undefined || bundleItem.qty < 1) {
-          errors.push('Item paket memiliki format ID paket atau jumlah yang tidak valid.');
-          continue;
-        }
-        const bundle = await Bundle.findById(bundleItem.menuBundleId);
-        if (!bundle || bundle.isDeleted || !bundle.isActive) {
-          errors.push(`Paket ID '${bundleItem.menuBundleId}' tidak ditemukan, sudah dihapus, atau tidak aktif.`);
-          continue;
-        }
-
-        const processedBundleMenus = [];
-        if (bundleItem.items && Array.isArray(bundleItem.items)) {
-            for (const chosenMenuItem of bundleItem.items) {
-                if (!chosenMenuItem.menuId || !mongoose.Types.ObjectId.isValid(chosenMenuItem.menuId) || chosenMenuItem.qty === undefined || chosenMenuItem.qty < 1) {
-                    errors.push('Menu dalam paket memiliki format ID menu atau jumlah yang tidak valid.');
-                    continue;
-                }
-                const chosenMenu = await Menu.findById(chosenMenuItem.menuId); // Fetch chosen menu to get its recipe
-                if (!chosenMenu || chosenMenu.isDeleted || !chosenMenu.isActive) {
-                    errors.push(`Menu ID '${chosenMenuItem.menuId}' dalam paket tidak ditemukan, sudah dihapus, atau tidak aktif.`);
-                    continue;
-                }
-                processedBundleMenus.push({
-                    menuId: chosenMenu._id,
-                    name: chosenMenu.name,
-                    qty: chosenMenuItem.qty,
-                    price: chosenMenu.price
-                });
-
-                // NEW: Add chosen menu ingredients from bundle to ingredientsConsumedMap
-                if (chosenMenu.recipe && Array.isArray(chosenMenu.recipe)) {
-                  for (const recipeIngredient of chosenMenu.recipe) {
-                    if (!recipeIngredient.ingredientId || recipeIngredient.qty === undefined || recipeIngredient.qty < 0) continue;
-                    const ingredient = await Ingredient.findById(recipeIngredient.ingredientId);
-                    // Crucial: Multiply by bundleItem.qty AND chosenMenuItem.qty
-                    const consumedQty = bundleItem.qty * chosenMenuItem.qty * recipeIngredient.qty;
-                    const consumedExpense = ingredient ? (consumedQty * ingredient.price) : 0;
-                    const ingredientName = ingredient ? ingredient.name : null;
-                    const ingredientUnit = ingredient ? ingredient.unit : null;
-
-                    const current = ingredientsConsumedMap.get(recipeIngredient.ingredientId.toString()) || { qty: 0, expense: 0, name: ingredientName, unit: ingredientUnit };
-                    ingredientsConsumedMap.set(recipeIngredient.ingredientId.toString(), {
-                      ingredientId: recipeIngredient.ingredientId,
-                      name: current.name,
-                      qty: current.qty + consumedQty,
-                      expense: current.expense + consumedExpense,
-                      unit: current.unit
-                    });
-                  }
-                }
-            }
-        }
-
-        processedItemBundle.push({
-          menuBundleId: bundle._id,
-          name: bundle.name,
-          qty: bundleItem.qty,
-          price: bundle.price,
-          items: processedBundleMenus,
-        });
-        calculatedTotalPrice += bundleItem.qty * bundle.price;
-      }
-    }
-
-    // --- Process itemPromo and calculate ingredients used ---
-    const processedItemPromo = [];
-    if (itemPromo && Array.isArray(itemPromo)) {
-      for (const promoItem of itemPromo) {
-        if (!promoItem.menuId || !mongoose.Types.ObjectId.isValid(promoItem.menuId) || promoItem.qty === undefined || promoItem.qty < 1) {
-          errors.push('Item promo memiliki format ID menu atau jumlah yang tidak valid.');
-          continue;
-        }
-        const menu = await Menu.findById(promoItem.menuId); // Fetch menu to get its recipe
-        if (!menu || menu.isDeleted || !menu.isActive) {
-          errors.push(`Menu ID '${promoItem.menuId}' di item promo tidak ditemukan, sudah dihapus, atau tidak aktif.`);
-          continue;
-        }
-        processedItemPromo.push({
-          menuId: menu._id,
-          name: menu.name,
-          qty: promoItem.qty,
-        });
-        // Promo items don't add to total price, but their ingredients are consumed
-
-        // NEW: Add promo menu ingredients to ingredientsConsumedMap
-        if (menu.recipe && Array.isArray(menu.recipe)) {
-          for (const recipeIngredient of menu.recipe) {
-            if (!recipeIngredient.ingredientId || recipeIngredient.qty === undefined || recipeIngredient.qty < 0) continue;
-            const ingredient = await Ingredient.findById(recipeIngredient.ingredientId);
-            const consumedQty = promoItem.qty * recipeIngredient.qty;
-            const consumedExpense = ingredient ? (consumedQty * ingredient.price) : 0;
-            const ingredientName = ingredient ? ingredient.name : null;
-            const ingredientUnit = ingredient ? ingredient.unit : null;
-
-            const current = ingredientsConsumedMap.get(recipeIngredient.ingredientId.toString()) || { qty: 0, expense: 0, name: ingredientName, unit: ingredientUnit };
-            ingredientsConsumedMap.set(recipeIngredient.ingredientId.toString(), {
-              ingredientId: recipeIngredient.ingredientId,
-              name: current.name,
-              qty: current.qty + consumedQty,
-              expense: current.expense + consumedExpense,
-              unit: current.unit
-            });
-          }
-        }
-      }
-    }
-
-    // --- Validate Payment ---
-    if (!payment || !payment.method || !Object.values(PaymentMethods).includes(payment.method)) {
-      errors.push('Metode pembayaran tidak valid.');
-    }
-    const evidenceUrl = getPaymentEvidenceUrl(req); // Get evidence URL from uploaded file
-    if (payment.method !== PaymentMethods.CASH && !evidenceUrl) {
-      errors.push('Bukti pembayaran diperlukan untuk metode pembayaran non-tunai (Transfer, QRIS).');
-    }
-    // Update payment object with evidenceUrl
-    payment.evidenceUrl = evidenceUrl;
-
-    // NEW: Convert totalPaid to number if it's a string
-    if (typeof totalPaid === 'string') {
-        const parsedTotalPaid = parseFloat(totalPaid);
-        if (isNaN(parsedTotalPaid)) {
-            errors.push('Jumlah dibayar ("totalPaid") harus berupa angka yang valid.');
-        } else {
-            totalPaid = parsedTotalPaid; // Update totalPaid to its numeric value
-        }
-    }
-
-    // --- Validate totalPaid ---
-    if (totalPaid === undefined || typeof totalPaid !== 'number' || totalPaid < 0) {
-      errors.push('Jumlah dibayar ("totalPaid") diperlukan dan harus berupa angka non-negatif.');
-    }
-    if (totalPaid < calculatedTotalPrice) {
-      errors.push(`Jumlah dibayar (${totalPaid}) kurang dari total harga (${calculatedTotalPrice}).`);
-    }
+    // Delegate processing and validation to the service
+    const { saleData, errors } = await saleProcessingService.processNewSaleData(
+        req.body,
+        req.user, // Pass req.user for operator validation
+        paymentEvidenceUrl
+    );
 
     if (errors.length > 0) {
       // If a file was uploaded but validation fails, delete the uploaded file
@@ -339,26 +64,6 @@ export const createSale = async (req, res) => {
       }
       return res.status(400).json({ message: 'Validasi gagal.', errors });
     }
-
-    // Convert ingredientsConsumedMap to array for the schema
-    const finalIngredientUsed = Array.from(ingredientsConsumedMap.values());
-
-
-    // --- Construct Sale Data ---
-    const saleData = {
-      outlet: outletSnapshot,
-      operator: operatorSnapshot,
-      itemSingle: processedItemSingle,
-      itemBundle: processedItemBundle,
-      itemPromo: processedItemPromo,
-      totalPrice: calculatedTotalPrice,
-      totalPaid: totalPaid,
-      payment: payment,
-      ingredientUsed: finalIngredientUsed, // NEW: Add the calculated ingredientUsed
-      // invoicePrintHistory will be empty on creation
-      // isValid defaults to true
-      // isDeleted defaults to false
-    };
 
     const sale = await Sale.create(saleData); // Code will be generated by pre-save hook
     res.status(201).json({
@@ -402,7 +107,7 @@ export const createSale = async (req, res) => {
 };
 
 // @desc    Get all sales
-// @route   GET /api/v1/sales
+// @route   GET /api/sales
 // @access  Private (Admin, SPV Area)
 export const getSales = async (req, res) => {
   try {
@@ -454,7 +159,7 @@ export const getSales = async (req, res) => {
 };
 
 // @desc    Get a single sale by ID
-// @route   GET /api/v1/sales/:id
+// @route   GET /api/sales/:id
 // @access  Private (Admin, SPV Area, Operator - operator can only view their own outlet's sales)
 export const getSaleById = async (req, res) => {
   try {
@@ -470,13 +175,13 @@ export const getSaleById = async (req, res) => {
     }
 
     // Optional Security: If req.user is operator, check if outlet matches
-    if (req.user && req.user.roles.includes(Roles.operator)) {
-        // Assuming req.user has outletId or you fetch it here
-        const operatorOutlet = await Outlet.findOne({ operators: req.user._id, isDeleted: false });
-        if (!operatorOutlet || operatorOutlet._id.toString() !== sale.outlet.outletId.toString()) {
-            return res.status(403).json({ message: 'Anda tidak diizinkan untuk melihat penjualan ini.' });
-        }
-    }
+    // if (req.user && req.user.roles.includes(Roles.operator)) {
+    //     // Assuming req.user has outletId or you fetch it here
+    //     const operatorOutlet = await Outlet.findOne({ operators: req.user._id, isDeleted: false });
+    //     if (!operatorOutlet || operatorOutlet._id.toString() !== sale.outlet.outletId.toString()) {
+    //         return res.status(403).json({ message: 'Anda tidak diizinkan untuk melihat penjualan ini.' });
+    //     }
+    // }
 
     res.status(200).json(sale.toJSON());
   } catch (error) {
@@ -484,12 +189,12 @@ export const getSaleById = async (req, res) => {
         return res.status(400).json({ message: 'Format ID Penjualan tidak valid.' });
     }
     console.error('Kesalahan saat mengambil penjualan berdasarkan ID:', error);
-    res.status(500).json({ message: 'Kesalahan server saat mengambil penjualan.', error: error.message });
+    res.status(500).json({ message: 'Kesalahan server saat mengambil penjualan berdasarkan ID.', error: error.message });
   }
 };
 
 // @desc    Update a sale (e.g., mark as invalid, add print history)
-// @route   PATCH /api/v1/sales/:id
+// @route   PATCH /api/sales/:id
 // @access  Private (Admin, or specific roles for certain updates like isValid)
 export const updateSale = async (req, res) => {
   try {
@@ -569,7 +274,7 @@ export const updateSale = async (req, res) => {
 };
 
 // @desc    Soft delete a sale (Admin only)
-// @route   DELETE /api/v1/sales/:id
+// @route   DELETE /api/sales/:id
 // @access  Private (Admin role)
 export const deleteSale = async (req, res) => {
   try {

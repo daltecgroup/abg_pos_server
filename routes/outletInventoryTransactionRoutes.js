@@ -4,6 +4,9 @@ import multer from 'multer';
 import path from 'path';
 import sharp from 'sharp';
 import fs from 'fs/promises';
+import protect from '../middleware/auth.js';
+import authorizeRoles from '../middleware/rbac.js';
+import { Roles } from '../constants/roles.js';
 
 const router = express.Router();
 
@@ -88,12 +91,12 @@ const processAndSaveInventoryEvidence = async (req, res, next) => {
 // --- Outlet Inventory Transaction Routes ---
 // Base URL for these routes will be /api/v1/outletinventorytransactions
 router.route('/')
-  .post(upload.single('evidence'), processAndSaveInventoryEvidence, controller.createOutletInventoryTransaction)
-  .get(controller.getOutletInventoryTransactions);
+  .post(protect, upload.single('evidence'), processAndSaveInventoryEvidence, controller.createOutletInventoryTransaction)
+  .get(protect, controller.getOutletInventoryTransactions);
 
 router.route('/:id')
-  .get(controller.getOutletInventoryTransactionById)
-  .patch(controller.updateOutletInventoryTransaction) // For isValid, isCalculated, notes update
-  .delete(controller.deleteOutletInventoryTransaction); // Admin only soft delete
+  .get(protect, controller.getOutletInventoryTransactionById)
+  .patch(protect, authorizeRoles(Roles.admin), controller.updateOutletInventoryTransaction) // For isValid, isCalculated, notes update
+  .delete(protect, authorizeRoles(Roles.admin), controller.deleteOutletInventoryTransaction); // Admin only soft delete
 
 export default router;

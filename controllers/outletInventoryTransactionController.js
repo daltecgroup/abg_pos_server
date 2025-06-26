@@ -8,6 +8,10 @@ import { Roles } from '../constants/roles.js';
 import mongoose from 'mongoose';
 import multer from 'multer'; // For Multer error handling
 
+// NEW: Import the new service layer
+import * as outletInventoryService from '../services/outletInventoryService.js';
+
+
 // --- Helper Functions ---
 
 // Helper to validate User references
@@ -42,6 +46,7 @@ const getEvidenceUrl = (req, uploadDirectory) => {
 // @route   POST /api/v1/outletinventorytransactions
 // @access  Private (Operator, Admin, SPV Area - depending on transaction type)
 export const createOutletInventoryTransaction = async (req, res) => {
+    let createdTransaction = null; // Store for potential service call or rollback
     try {
         let { ingredientId, outletId, sourceType, ref, transactionType, qty, notes } = req.body;
         const errors = [];
@@ -165,10 +170,26 @@ export const createOutletInventoryTransaction = async (req, res) => {
             notes,
             createdBy: createdBySnapshot,
             evidenceUrl,
-            // isValid, validatedAt, isCalculated, calculatedAt default to false/null
+            isValid: false, // Default to false, waiting for Admin/SPV Area validation
+            isCalculated: false, // Default to false, waiting for sync service
         };
 
         const newTransaction = await OutletInventoryTransaction.create(transactionData);
+        createdTransaction = newTransaction; // Store the created transaction
+
+        // NEW: Call the service to sync the outlet inventory
+        // The service will set isCalculated to true if successful
+        const syncSuccess = await outletInventoryService.syncOutletInventory(
+            newTransaction,
+            { userId: req.user._id, userName: req.user.name } // Pass user context
+        );
+
+        if (!syncSuccess) {
+            // If sync fails here, log error. Consider rolling back OIT isValid to false if critical.
+            // For now, proceed but it means inventory might be inconsistent.
+            console.warn(`Failed to sync OutletInventory for new transaction ${newTransaction.id}.`);
+        }
+
 
         res.status(201).json({
             message: 'Transaksi inventori outlet berhasil dicatat.',
@@ -305,39 +326,61 @@ export const updateOutletInventoryTransaction = async (req, res) => {
             return res.status(404).json({ message: 'Transaksi inventori outlet tidak ditemukan atau sudah dihapus.' });
         }
 
-        // --- Validation for fields that can be updated ---
-        if (updateData.isValid !== undefined && typeof updateData.isValid !== 'boolean') {
-            errors.push('Nilai "isValid" harus berupa boolean.');
+        const userContext = { userId: req.user._id, userName: req.user.name };
+
+        // Handle 'isValid' status change using the new toggle function
+        if (updateData.isValid !== undefined && typeof updateData.isValid === 'boolean') {
+            const toggleSuccess = await outletInventoryService.toggleOutletInventoryTransactionValidation(
+                id,
+                updateData.isValid, // Pass the desired state
+                userContext
+            );
+            if (!toggleSuccess) {
+                errors.push('Gagal mengubah status validasi transaksi inventori.');
+            }
+            // Remove these fields from updateData as the service function handles their update
+            delete updateData.isValid;
+            delete updateData.isCalculated;
+            delete updateData.calculatedAt;
         }
-        if (updateData.isCalculated !== undefined && typeof updateData.isCalculated !== 'boolean') {
-            errors.push('Nilai "isCalculated" harus berupa boolean.');
+        // Prevent direct manipulation of isCalculated, let the service handle it
+        if (updateData.isCalculated !== undefined) {
+            errors.push('Bidang "isCalculated" tidak dapat diperbarui secara langsung.');
         }
+        if (updateData.calculatedAt !== undefined) {
+            errors.push('Bidang "calculatedAt" tidak dapat diperbarui secara langsung.');
+        }
+
+        // Validate notes if provided
         if (updateData.notes !== undefined && typeof updateData.notes !== 'string') {
             errors.push('Catatan harus berupa string.');
         } else if (updateData.notes !== undefined) {
             updateData.notes = updateData.notes.trim();
         }
 
-        // Prevent direct update of core fields like ingredient, outlet, transactionType, qty, source
-        // These should only be set on creation.
-        const protectedFields = ['ingredientId', 'outletId', 'sourceType', 'ref', 'transactionType', 'qty', 'createdBy', 'evidenceUrl', 'code'];
-        for (const field of protectedFields) {
-            if (updateData[field] !== undefined) {
-                errors.push(`Bidang '${field}' tidak dapat diperbarui.`);
-            }
-        }
-
-
         if (errors.length > 0) {
             return res.status(400).json({ message: 'Validasi gagal.', errors });
         }
 
-        // Apply updates
+        // Only proceed with update if there are fields left to update (e.g., notes)
+        if (Object.keys(updateData).length === 0) {
+            // Fetch the latest state of the transaction after service call if no direct updates
+            const refreshedTransaction = await OutletInventoryTransaction.findById(id);
+            return res.status(200).json({
+                message: 'Tidak ada pembaruan yang diperlukan atau semua pembaruan ditangani oleh layanan.',
+                transaction: refreshedTransaction ? refreshedTransaction.toJSON() : existingTransaction.toJSON()
+            });
+        }
+
         const transaction = await OutletInventoryTransaction.findByIdAndUpdate(
             id,
-            { $set: updateData }, // Use $set to update specific fields, preserving others
-            { new: true, runValidators: true } // runValidators to trigger schema validation
+            { $set: updateData },
+            { new: true, runValidators: true }
         );
+
+        if (!transaction) {
+            return res.status(404).json({ message: 'Transaksi inventori outlet tidak ditemukan.' });
+        }
 
         res.status(200).json({
             message: 'Transaksi inventori outlet berhasil diperbarui.',
@@ -361,6 +404,7 @@ export const updateOutletInventoryTransaction = async (req, res) => {
 // @route   DELETE /api/v1/outletinventorytransactions/:id
 // @access  Private (Admin role)
 export const deleteOutletInventoryTransaction = async (req, res) => {
+    let transactionToDelete = null; // Store for potential service call
     try {
         const { id } = req.params;
         if (!mongoose.Types.ObjectId.isValid(id)) {
@@ -372,15 +416,33 @@ export const deleteOutletInventoryTransaction = async (req, res) => {
             return res.status(403).json({ message: 'Anda tidak memiliki izin untuk menghapus transaksi inventori outlet ini.' });
         }
 
+        // Fetch the transaction *before* deleting it to get its current state for reversal
+        transactionToDelete = await OutletInventoryTransaction.findById(id);
+        if (!transactionToDelete || transactionToDelete.isDeleted) {
+             return res.status(404).json({ message: 'Transaksi inventori outlet tidak ditemukan atau sudah dihapus.' });
+        }
+
+        // NEW: Invalidate the linked OIT using the toggle function if it was valid
+        if (transactionToDelete.isValid === true) {
+            const userContext = req.user ? { userId: req.user._id, userName: req.user.name } : { userId: null, name: 'System' };
+            const invalidateSuccess = await outletInventoryService.toggleOutletInventoryTransactionValidation(
+                id, // Pass the transaction ID
+                false, // Set isValid to false
+                userContext
+            );
+            if (!invalidateSuccess) {
+                console.error(`Failed to invalidate OIT ${id} during soft delete. Proceeding with soft delete anyway.`);
+                // Decide if you want to prevent delete on invalidation failure
+            }
+        }
+
+        // Now, proceed with soft deleting the OIT document itself
         const transaction = await OutletInventoryTransaction.findByIdAndUpdate(
             id,
             { isDeleted: true, deletedAt: new Date(), deletedBy: req.user._id },
             { new: true }
         );
 
-        if (!transaction) {
-            return res.status(404).json({ message: 'Transaksi inventori outlet tidak ditemukan.' });
-        }
 
         res.status(200).json({
             message: 'Transaksi inventori outlet berhasil dihapus (soft delete).',

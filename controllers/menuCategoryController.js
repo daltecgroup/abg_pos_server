@@ -9,23 +9,32 @@ export const createMenuCategory = async (req, res) => {
 
     // Controller-side validation for required fields
     if (!name || name.trim() === '') {
-        return res.status(400).json({ message: 'Category name is required.' });
+      return res.status(400).json({ message: 'Category name is required.' });
     }
     // isActive is boolean and has a default, so it's less critical to validate its presence
     if (isActive !== undefined && typeof isActive !== 'boolean') {
       return res.status(400).json({ message: 'isActive must be a boolean.' });
     }
 
+    const existingName = await MenuCategory.find({
+      name,
+      isDeleted: false
+    });
+    
+    if (existingName.length > 0) {
+      return res.status(409).json({ message: `Kategori menu dengan nama '${name}' sudah ada.` });
+    }
+
     const menuCategory = await MenuCategory.create(req.body);
     res.status(201).json({
-      message: 'Menu category created successfully',
+      message: 'Kategori Menu sukses dibuat.',
       menuCategory: menuCategory.toJSON()
     });
   } catch (error) {
     if (error.code === 11000) { // Duplicate key error for 'name'
       const field = Object.keys(error.keyValue)[0];
       const value = error.keyValue[field];
-      return res.status(409).json({ message: `Menu category with this ${field} '${value}' already exists.` });
+      return res.status(409).json({ message: `Kategori menu dengan nama ${field} '${value}' sudah ada.` });
     }
     if (error.name === 'ValidationError') {
       const errors = Object.keys(error.errors).map(key => error.errors[key].message);
@@ -89,6 +98,17 @@ export const updateMenuCategory = async (req, res) => {
       return res.status(400).json({ message: 'isActive must be a boolean if provided.' });
     }
 
+    if (updateData.name !== undefined && typeof updateData.name === 'string') {
+      const existingName = await MenuCategory.find({
+        _id: { $ne: id },
+        name: updateData.name,
+        isDeleted: false
+      });
+      if (existingName.length > 0) {
+        return res.status(409).json({ message: `Kategori menu dengan nama '${updateData.name}' sudah ada.` });
+      }
+    }
+
     const menuCategory = await MenuCategory.findByIdAndUpdate(
       id,
       updateData,
@@ -100,12 +120,12 @@ export const updateMenuCategory = async (req, res) => {
     }
 
     res.status(200).json({
-      message: 'Menu category updated successfully',
+      message: 'kategori menu berhasil diubah',
       menuCategory: menuCategory.toJSON()
     });
   } catch (error) {
     if (error.name === 'CastError' && error.kind === 'ObjectId') {
-        return res.status(400).json({ message: 'Invalid Menu Category ID format.' });
+      return res.status(400).json({ message: 'Invalid Menu Category ID format.' });
     }
     if (error.code === 11000) { // Duplicate key error for 'name'
       const field = Object.keys(error.keyValue)[0];
@@ -143,7 +163,7 @@ export const deleteMenuCategory = async (req, res) => {
     });
   } catch (error) {
     if (error.name === 'CastError' && error.kind === 'ObjectId') {
-        return res.status(400).json({ message: 'Invalid Menu Category ID format.' });
+      return res.status(400).json({ message: 'Invalid Menu Category ID format.' });
     }
     console.error('Error soft deleting menu category:', error);
     res.status(500).json({ message: 'Server error soft-deleting menu category', error: error.message });

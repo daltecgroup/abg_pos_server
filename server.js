@@ -20,6 +20,8 @@ import bundleRoutes from './routes/bundleRoutes.js';
 import attendanceRoutes from './routes/attendanceRoutes.js';
 import saleRoutes from './routes/saleRoutes.js';
 import outletInventoryTransactionRoutes from './routes/outletInventoryTransactionRoutes.js';
+import outletInventoryRoutes from './routes/outletInventoryRoutes.js';
+import dataInitRoutes from './routes/dataInitRoutes.js';
 
 const app = express();
 const server = http.createServer(app);
@@ -64,6 +66,8 @@ app.use('/api/v1/bundles', bundleRoutes);
 app.use('/api/v1/attendances', attendanceRoutes);
 app.use('/api/v1/sales', saleRoutes);
 app.use('/api/v1/outletinventorytransactions', outletInventoryTransactionRoutes);
+app.use('/api/v1/outletinventory', outletInventoryRoutes);
+app.use('/api/v1/data-init', dataInitRoutes);
 
 // Basic route for testing server status
 app.get('/api/v1', (req, res) => {
