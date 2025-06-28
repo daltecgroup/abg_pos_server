@@ -35,6 +35,14 @@ export const createAddon = async (req, res) => {
       }
     }
 
+    const existingName = await Addon.find({
+      name,
+      isDeleted: false
+    });
+
+    if (existingName.length > 0) {
+      return res.status(409).json({ message: `Addon dengan nama '${name}' sudah ada.` });
+    }
 
     if (errors.length > 0) {
       return res.status(400).json({ message: 'Validasi gagal.', errors });
@@ -84,7 +92,7 @@ export const getAddons = async (req, res) => {
     // Populate recipe ingredients if the Addon model includes a recipe field and it's requested
     const populateFields = req.query.populate;
     if (populateFields && populateFields.includes('recipe')) {
-        query.populate('recipe.ingredientId', 'name unit price');
+      query.populate('recipe.ingredientId');
     }
 
     const addons = await query.exec();
@@ -106,7 +114,7 @@ export const getAddonById = async (req, res) => {
     }
 
     const addon = await Addon.findById(id)
-                             .populate('recipe.ingredientId', 'name unit price'); // NEW: Populate recipe if it exists;
+      .populate('recipe.ingredientId', 'name unit price'); // NEW: Populate recipe if it exists;
 
     if (!addon || addon.isDeleted === true) {
       return res.status(404).json({ message: 'Addon tidak ditemukan atau sudah dihapus.' });
@@ -154,6 +162,18 @@ export const updateAddon = async (req, res) => {
       }
     }
 
+    if (updateData.name !== undefined && typeof updateData.name === 'string') {
+      const existingName = await Addon.find({
+        _id: { $ne: id },
+        name: updateData.name,
+        isDeleted: false
+      });
+      if (existingName.length > 0) {
+        return res.status(409).json({ message: `Addon dengan nama '${updateData.name}' sudah ada.` });
+      }
+    }
+
+
 
     if (errors.length > 0) {
       return res.status(400).json({ message: 'Validasi gagal.', errors });
@@ -163,7 +183,7 @@ export const updateAddon = async (req, res) => {
       id,
       updateData,
       { new: true, runValidators: true } // runValidators to trigger schema validation
-    );
+    ).populate('recipe.ingredientId');
 
     if (!addon) {
       return res.status(404).json({ message: 'Addon tidak ditemukan.' });
@@ -175,7 +195,7 @@ export const updateAddon = async (req, res) => {
     });
   } catch (error) {
     if (error.name === 'CastError' && error.kind === 'ObjectId') {
-        return res.status(400).json({ message: 'Format ID Addon tidak valid.' });
+      return res.status(400).json({ message: 'Format ID Addon tidak valid.' });
     }
     if (error.code === 11000) { // Duplicate key error for 'code' or 'name'
       const field = Object.keys(error.keyValue)[0];
@@ -217,7 +237,7 @@ export const deleteAddon = async (req, res) => {
     });
   } catch (error) {
     if (error.name === 'CastError' && error.kind === 'ObjectId') {
-        return res.status(400).json({ message: 'Format ID Addon tidak valid.' });
+      return res.status(400).json({ message: 'Format ID Addon tidak valid.' });
     }
     console.error('Kesalahan saat menghapus addon:', error);
     res.status(500).json({ message: 'Kesalahan server saat menghapus addon.', error: error.message });

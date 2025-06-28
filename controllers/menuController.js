@@ -112,10 +112,10 @@ export const getMenus = async (req, res) => {
     const populateFields = req.query.populate;
     if (populateFields) {
       if (populateFields.includes('menuCategoryId')) query.populate('menuCategoryId', 'name');
-      if (populateFields.includes('recipe')) query.populate('recipe.ingredientId', 'name unit price'); // Populate ingredient details for recipe
+      if (populateFields.includes('recipe')) query.populate('recipe.ingredientId', 'name unit price');
     } else {
       // Default populate commonly needed fields
-      query.populate('menuCategoryId', 'name');
+      // query.populate('menuCategoryId', 'name');
     }
 
 

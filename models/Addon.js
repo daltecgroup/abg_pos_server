@@ -11,7 +11,6 @@ const AddonSchema = new Schema({
   name: {
     type: String,
     required: true,
-    unique: true, // Enforce unique addon names
     trim: true,
     index: true, // Index for searching/sorting by name
   },

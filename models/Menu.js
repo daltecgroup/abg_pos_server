@@ -32,6 +32,11 @@ const MenuSchema = new Schema({
     required: true,
     min: 0,
   },
+  discount: {
+    type: Number,
+    min: 0,
+    default: 0
+  },
   // NEW: recipe field for ingredients used in this menu
   recipe: [
     {
@@ -79,6 +84,7 @@ const MenuSchema = new Schema({
     getters: true,
     transform: (doc, ret) => {
       delete ret.__v;
+      delete ret._id;
       return ret;
     }
   },
