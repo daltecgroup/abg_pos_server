@@ -56,9 +56,9 @@ export const createOutlet = async (req, res) => {
     }
 
     if (imgUrl !== undefined && typeof imgUrl !== 'string') {
-        errors.push('imgUrl harus berupa string.');
+      errors.push('imgUrl harus berupa string.');
     } else if (imgUrl !== undefined) {
-        req.body.imgUrl = imgUrl.trim(); // Trim imgUrl if provided
+      req.body.imgUrl = imgUrl.trim(); // Trim imgUrl if provided
     }
 
     if (foundedAt !== undefined && isNaN(new Date(foundedAt).getTime())) {
@@ -79,11 +79,11 @@ export const createOutlet = async (req, res) => {
     req.body.name = req.body.name.trim();
     // Trim address fields if they exist
     if (req.body.address) {
-        req.body.address.province = req.body.address.province?.trim();
-        req.body.address.regency = req.body.address.regency?.trim();
-        req.body.address.district = req.body.address.district?.trim();
-        req.body.address.village = req.body.address.village?.trim();
-        req.body.address.street = req.body.address.street?.trim();
+      req.body.address.province = req.body.address.province?.trim();
+      req.body.address.regency = req.body.address.regency?.trim();
+      req.body.address.district = req.body.address.district?.trim();
+      req.body.address.village = req.body.address.village?.trim();
+      req.body.address.street = req.body.address.street?.trim();
     }
 
 
@@ -129,15 +129,16 @@ export const getOutlets = async (req, res) => {
     // Populate associated users if requested or always
     const populateFields = req.query.populate;
     if (populateFields) {
-        if (populateFields.includes('franchisees')) query.populate('franchisees', 'name userId');
-        if (populateFields.includes('operators')) query.populate('operators', 'name userId');
-        if (populateFields.includes('spvAreas')) query.populate('spvAreas', 'name userId');
-    } else {
-        // Default populate commonly needed fields if no populate param
-        query.populate('franchisees', 'name userId')
-             .populate('operators', 'name userId')
-             .populate('spvAreas', 'name userId');
+      if (populateFields.includes('franchisees')) query.populate('franchisees', 'name userId');
+      if (populateFields.includes('operators')) query.populate('operators', 'name userId');
+      if (populateFields.includes('spvAreas')) query.populate('spvAreas', 'name userId');
     }
+    // else {
+    // Default populate commonly needed fields if no populate param
+    //     query.populate('franchisees', 'name userId')
+    //          .populate('operators', 'name userId')
+    //          .populate('spvAreas', 'name userId');
+    // }
 
 
     const outlets = await query.exec();
@@ -159,9 +160,9 @@ export const getOutletById = async (req, res) => {
     }
 
     const outlet = await Outlet.findById(id)
-                               .populate('franchisees', 'name userId')
-                               .populate('operators', 'name userId')
-                               .populate('spvAreas', 'name userId');
+      .populate('franchisees', 'name userId')
+      .populate('operators', 'name userId')
+      .populate('spvAreas', 'name userId');
 
     if (!outlet || outlet.isDeleted === true) {
       return res.status(404).json({ message: 'Outlet tidak ditemukan atau sudah dihapus' });
@@ -181,8 +182,34 @@ export const updateOutlet = async (req, res) => {
     const { id } = req.params;
     const updateData = { ...req.body };
 
+    console.log(updateData);
+
     if (!mongoose.Types.ObjectId.isValid(id)) {
       return res.status(400).json({ message: 'Format ID Outlet tidak valid.' });
+    }
+
+    // check if outlet with same code is exist and not deleted
+    if (updateData.code !== undefined && typeof updateData.code === 'string') {
+      const existingCode = await Outlet.find({
+        _id: { $ne: id },
+        code: updateData.code,
+        isDeleted: false
+      });
+      if (existingCode.length > 0) {
+        return res.status(409).json({ message: `Gerai dengan kode '${updateData.code}' sudah ada.` });
+      }
+    }
+
+    // check if outlet with same name is exist and not deleted
+    if (updateData.name !== undefined && typeof updateData.name === 'string') {
+      const existingName = await Outlet.find({
+        _id: { $ne: id },
+        name: updateData.name,
+        isDeleted: false
+      });
+      if (existingName.length > 0) {
+        return res.status(409).json({ message: `Gerai dengan nama '${updateData.name}' sudah ada.` });
+      }
     }
 
     // --- Controller-side Validation for Update ---
@@ -207,18 +234,18 @@ export const updateOutlet = async (req, res) => {
 
       // Trim address fields if they exist in updateData
       if (updateData.address) {
-          updateData.address.province = updateData.address.province?.trim();
-          updateData.address.regency = updateData.address.regency?.trim();
-          updateData.address.district = updateData.address.district?.trim();
-          updateData.address.village = updateData.address.village?.trim();
-          updateData.address.street = updateData.address.street?.trim();
+        updateData.address.province = updateData.address.province?.trim();
+        updateData.address.regency = updateData.address.regency?.trim();
+        updateData.address.district = updateData.address.district?.trim();
+        updateData.address.village = updateData.address.village?.trim();
+        updateData.address.street = updateData.address.street?.trim();
       }
     }
 
     if (updateData.imgUrl !== undefined && typeof updateData.imgUrl !== 'string') {
-        errors.push('imgUrl harus berupa string.');
+      errors.push('imgUrl harus berupa string.');
     } else if (updateData.imgUrl !== undefined) {
-        updateData.imgUrl = updateData.imgUrl.trim();
+      updateData.imgUrl = updateData.imgUrl.trim();
     }
 
     if (updateData.foundedAt !== undefined && isNaN(new Date(updateData.foundedAt).getTime())) {
@@ -251,7 +278,7 @@ export const updateOutlet = async (req, res) => {
     });
   } catch (error) {
     if (error.name === 'CastError' && error.kind === 'ObjectId') {
-        return res.status(400).json({ message: 'Format ID Outlet tidak valid.' });
+      return res.status(400).json({ message: 'Format ID Outlet tidak valid.' });
     }
     if (error.code === 11000) { // Duplicate key error for 'name'
       const field = Object.keys(error.keyValue)[0];
@@ -293,7 +320,7 @@ export const deleteOutlet = async (req, res) => {
     });
   } catch (error) {
     if (error.name === 'CastError' && error.kind === 'ObjectId') {
-        return res.status(400).json({ message: 'Format ID Outlet tidak valid.' });
+      return res.status(400).json({ message: 'Format ID Outlet tidak valid.' });
     }
     console.error('Error soft deleting outlet:', error);
     res.status(500).json({ message: 'Kesalahan server saat menghapus outlet secara lunak', error: error.message });
@@ -331,8 +358,8 @@ export const getOutletsByOperator = async (req, res) => {
     const query = Outlet.find(filter).sort({ createdAt: -1 });
 
     query.populate('franchisees', 'name userId')
-         .populate('operators', 'name userId')
-         .populate('spvAreas', 'name userId');
+      .populate('operators', 'name userId')
+      .populate('spvAreas', 'name userId');
 
     const outlets = await query.exec();
     res.status(200).json(outlets.map(outlet => outlet.toJSON()));
@@ -374,8 +401,8 @@ export const getOutletsByFranchisee = async (req, res) => {
     const query = Outlet.find(filter).sort({ createdAt: -1 });
 
     query.populate('franchisees', 'name userId')
-         .populate('operators', 'name userId')
-         .populate('spvAreas', 'name userId');
+      .populate('operators', 'name userId')
+      .populate('spvAreas', 'name userId');
 
     const outlets = await query.exec();
     res.status(200).json(outlets.map(outlet => outlet.toJSON()));
@@ -417,8 +444,8 @@ export const getOutletsBySpvArea = async (req, res) => {
     const query = Outlet.find(filter).sort({ createdAt: -1 });
 
     query.populate('franchisees', 'name userId')
-         .populate('operators', 'name userId')
-         .populate('spvAreas', 'name userId');
+      .populate('operators', 'name userId')
+      .populate('spvAreas', 'name userId');
 
     const outlets = await query.exec();
     res.status(200).json(outlets.map(outlet => outlet.toJSON()));

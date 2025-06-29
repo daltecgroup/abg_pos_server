@@ -6,6 +6,7 @@ const OutletSchema = new Schema({
     type: String,
     trim: true,
     uppercase: true,
+    unique: true,
     index: true, // Index for fast lookup by code
   },
   name: {
@@ -123,7 +124,7 @@ OutletSchema.pre('save', async function(next) {
         { $inc: { seq: 1 } },
         { upsert: true, new: true }
       );
-      this.code = `OUT${String(counter.seq).padStart(3, '0')}`;
+      this.code = `OUTLET${String(counter.seq).padStart(3, '0')}`;
     } catch (error) {
       console.error('Error generating outlet code:', error);
       return next(new Error('Failed to generate outlet code.'));
