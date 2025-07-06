@@ -61,7 +61,10 @@ export const acceptOrderItem = async (orderId, itemIndex, userContext) => {
             transactionType: TransactionTypes.IN, // Ingredients coming IN to outlet inventory
             qty: existingItem.qty, // Quantity from the order item
             notes: `Penerimaan bahan ${ingredientDoc.name} dari pesanan HQ (${order.code}).`,
-            createdBy: userContext,
+            createdBy: {
+                userId: userContext.userId,
+                name: userContext.userName
+            },
             evidenceUrl: null, // No direct evidence for auto-generated transactions from order acceptance
             isValid: true, // Auto-validated by order acceptance
             isCalculated: false, // Will be marked true by the service call below

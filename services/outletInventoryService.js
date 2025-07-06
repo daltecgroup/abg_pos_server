@@ -313,6 +313,82 @@ export const processUncalculatedTransactions = async () => {
     }
 };
 
+/**
+ * Toggles the 'isValid' status of an OutletInventoryTransaction.
+ * This is used for validating or invalidating transactions, often by an admin.
+ *
+ * @param {string} oitId - The ID of the OutletInventoryTransaction to update.
+ * @param {boolean} isValid - The new 'isValid' status to set.
+ * @param {object} userContext - Object containing userId and userName of the user performing the action.
+ * @returns {Promise<{ success: boolean, message: string, oit?: object }>}
+ */
+export const toggleOutletInventoryTransactionValidation = async (oitId, isValid, userContext) => {
+    try {
+        if (!mongoose.Types.ObjectId.isValid(oitId)) {
+            return { success: false, message: 'Format ID Transaksi Inventori Outlet tidak valid.' };
+        }
+
+        const updateFields = {
+            isValid: isValid,
+            // Set or clear validatedAt based on isValid status
+            validatedAt: isValid ? new Date() : null,
+            // You might also want to track who validated/invalidated it
+            // validatedBy: userContext.userId,
+        };
+
+        const oit = await OutletInventoryTransaction.findByIdAndUpdate(
+            oitId,
+            { $set: updateFields },
+            { new: true, runValidators: true }
+        );
+
+        if (!oit) {
+            return { success: false, message: 'Transaksi inventori outlet tidak ditemukan.' };
+        }
+
+        return {
+            success: true,
+            message: `Transaksi inventori outlet berhasil ${isValid ? 'divalidasi' : 'dibatalkan validasinya'}.`,
+            oit: oit.toJSON()
+        };
+    } catch (error) {
+        console.error(`Error toggling OIT validation for ${oitId}:`, error);
+        return { success: false, message: `Gagal mengubah status validasi transaksi inventori outlet: ${error.message}` };
+    }
+};
+
+/**
+ * Soft deletes an OutletInventoryTransaction by setting isDeleted to true.
+ *
+ * @param {string} oitId - The ID of the OutletInventoryTransaction to soft delete.
+ * @param {object} userContext - Object containing userId and userName of the user performing the action.
+ * @returns {Promise<{ success: boolean, message: string, oit?: object }>}
+ */
+export const softDeleteOutletInventoryTransaction = async (oitId, userContext) => {
+    try {
+        if (!mongoose.Types.ObjectId.isValid(oitId)) {
+            return { success: false, message: 'Format ID Transaksi Inventori Outlet tidak valid.' };
+        }
+
+        const oit = await OutletInventoryTransaction.findByIdAndUpdate(
+            oitId,
+            { isDeleted: true, deletedAt: new Date(), deletedBy: userContext.userId },
+            { new: true }
+        );
+
+        if (!oit) {
+            return { success: false, message: 'Transaksi inventori outlet tidak ditemukan.' };
+        }
+
+        // NEW: Trigger full recalculation after a successful soft delete
+        await recalculateAllOutletInventories();
+
+        return { success: true, message: 'Transaksi inventori outlet berhasil dihapus (soft delete).', oit: oit.toJSON() };
+    } catch (error) {
+        console.error(`Error soft-deleting OIT ${oitId}:`, error);
+        return { success: false, message: `Gagal menghapus transaksi inventori outlet: ${error.message}` };
+    }
+};
 
 // Schedule the periodic task for full recalculation
 const RECALCULATION_INTERVAL_MS = 10 * 1000; // 10 seconds for testing
@@ -325,3 +401,5 @@ const RECALCULATION_INTERVAL_MS = 10 * 1000; // 10 seconds for testing
 // const INCREMENTAL_SYNC_INTERVAL_MS = 1 * 60 * 1000; // e.g., every 1 minute
 // setInterval(processUncalculatedTransactions, INCREMENTAL_SYNC_INTERVAL_MS);
 // processUncalculatedTransactions(); // Run once immediately for incremental sync
+
+// Add other OutletInventoryTransaction-related service functions here as needed

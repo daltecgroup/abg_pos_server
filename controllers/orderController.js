@@ -1,3 +1,5 @@
+// controllers/orderController.js
+
 import Order from '../models/Order.js';
 import Outlet from '../models/Outlet.js';
 import User from '../models/User.js';
@@ -208,100 +210,131 @@ export const getOrderById = async (req, res) => {
 export const updateOrder = async (req, res) => {
   try {
     const { id } = req.params;
-    const { status, items } = req.body;
+    const { status, items } = req.body; // Destructure status and items from body
     const errors = [];
 
     if (!mongoose.Types.ObjectId.isValid(id)) {
       return res.status(400).json({ message: 'Format ID Pesanan tidak valid.' });
     }
 
-    const existingOrder = await Order.findById(id);
-    if (!existingOrder || existingOrder.isDeleted) {
+    let orderToUpdate = await Order.findById(id); // Fetch the current order
+    if (!orderToUpdate || orderToUpdate.isDeleted) {
       return res.status(404).json({ message: 'Pesanan bahan tidak ditemukan atau sudah dihapus.' });
     }
 
-    let updatedFields = {};
     const userContext = req.user ? { userId: req.user._id, userName: req.user.name } : { userId: null, name: 'System' };
 
-    // --- Handle Status Update ---
+    // --- NEW VALIDATION: Prevent status change from ACCEPTED unless items are unaccepted ---
+    if (status !== undefined && orderToUpdate.status === OrderStatuses.ACCEPTED && status !== OrderStatuses.ACCEPTED) {
+        return res.status(400).json({ message: 'Semua atau salah satu item pesanan harus dibatalkan terlebih dahulu sebelum merubah status ke selain diterima.' });
+    }
+
+    // --- Handle Status Update if provided ---
     if (status !== undefined) {
+      // The updateOrderStatus service handles validation and saving for the status field
       const statusUpdateResult = await orderFulfillmentService.updateOrderStatus(id, status, userContext);
       if (!statusUpdateResult.success) {
           errors.push(statusUpdateResult.message);
-      } else {
-          updatedFields.status = status; // Reflect the change for the response
       }
+      // After this call, the order in DB is updated with new status.
+      // We will refetch the order later to get the most current state.
     }
 
-    // --- Handle Items Update (specifically for isAccepted and creating/invalidating OutletInventoryTransaction) ---
+    // --- Handle Items Update (specifically for isAccepted) if provided ---
     if (items !== undefined && Array.isArray(items)) {
-        const newItemsArray = existingOrder.items.map(item => item.toObject());
+        // We need to iterate through the incoming 'items' array
+        // and apply changes to the existing order's items array.
+        // It's crucial to ensure atomicity or proper merging.
+        // The existing orderFulfillmentService.acceptOrderItem/unacceptOrderItem
+        // already handles finding the item by index and updating it, and saving the order.
+
+        // Refetch the order to ensure we have the latest state before processing item updates
+        // This is important because statusUpdateResult might have changed the order in DB.
+        orderToUpdate = await Order.findById(id);
+        if (!orderToUpdate) { // Re-check in case it was deleted by another process
+            return res.status(404).json({ message: 'Pesanan bahan tidak ditemukan setelah pembaruan status.' });
+        }
 
         for (const updatedItemRequest of items) {
-            const itemIndex = newItemsArray.findIndex(item => item.ingredientId.toString() === updatedItemRequest.ingredientId.toString());
+            // Find the index of the item in the order's current items array
+            const itemIndex = orderToUpdate.items.findIndex(item => item.ingredientId.toString() === updatedItemRequest.ingredientId.toString());
 
             if (itemIndex === -1) {
                 errors.push(`ID Bahan '${updatedItemRequest.ingredientId}' tidak ditemukan di pesanan asli.`);
                 continue;
             }
 
-            const existingItem = newItemsArray[itemIndex];
+            const existingItemInOrder = orderToUpdate.items[itemIndex];
 
-            if (updatedItemRequest.isAccepted === true && existingItem.isAccepted === false) {
+            // Check if isAccepted is being changed to true and it was false
+            if (updatedItemRequest.isAccepted === true && existingItemInOrder.isAccepted === false) {
                 const acceptResult = await orderFulfillmentService.acceptOrderItem(id, itemIndex, userContext);
                 if (!acceptResult.success) {
                     errors.push(acceptResult.message);
-                } else {
-                    // Update the local representation to reflect the changes made by the service
-                    existingItem.isAccepted = true;
-                    existingItem.outletInventoryTransactionId = acceptResult.outletInventoryTransactionId;
                 }
+                // The service call updates and saves the order.
+                // We'll refetch the order again after all item updates are processed.
             }
-            else if (updatedItemRequest.isAccepted === false && existingItem.isAccepted === true) {
+            // Check if isAccepted is being changed to false and it was true
+            else if (updatedItemRequest.isAccepted === false && existingItemInOrder.isAccepted === true) {
+                // NEW LOGIC: If item is unaccepted and has an OIT, soft delete the OIT
+                if (existingItemInOrder.outletInventoryTransactionId) {
+                    const deleteOITResult = await outletInventoryService.softDeleteOutletInventoryTransaction(
+                        existingItemInOrder.outletInventoryTransactionId,
+                        userContext
+                    );
+                    if (!deleteOITResult.success) {
+                        errors.push(`Gagal menghapus transaksi inventori outlet terkait: ${deleteOITResult.message}`);
+                        // Decide if this error should block the unaccept operation. For now, it logs and continues.
+                    } else {
+                        console.log(`Successfully soft-deleted OIT: ${existingItemInOrder.outletInventoryTransactionId}`);
+                    }
+                }
+
                 const unacceptResult = await orderFulfillmentService.unacceptOrderItem(id, itemIndex, userContext);
                 if (!unacceptResult.success) {
                     errors.push(unacceptResult.message);
-                } else {
-                    // Update the local representation
-                    existingItem.isAccepted = false;
-                    existingItem.outletInventoryTransactionId = null;
                 }
+                // The service call updates and saves the order.
+                // We'll refetch the order again after all item updates are processed.
             }
+            // If other fields of an item are being updated, they would need to be handled here
+            // For this request, only `isAccepted` is explicitly mentioned.
         }
-        updatedFields.items = newItemsArray; // Update the items array in the main update object
     }
 
     if (errors.length > 0) {
       return res.status(400).json({ message: 'Validasi gagal pada item pesanan atau kesalahan transaksi inventori.', errors });
     }
 
-    // If status was handled by the service, and items were handled by the service,
-    // the only thing left to update in the main order document might be nothing,
-    // or other general fields that are not handled by these specific services.
-    // For now, save the updated order directly if its items array was modified.
-    // If only status was updated, orderFulfillmentService.updateOrderStatus already saved it.
-
-    // If 'items' array was updated, we need to save the order document.
-    // Otherwise, if only status was updated (which is handled by `updateOrderStatus` that saves the order),
-    // we don't need to save again here.
-    let finalOrder;
-    if (updatedFields.items) {
-        finalOrder = await Order.findByIdAndUpdate(
-            id,
-            { $set: { items: updatedFields.items, ...(updatedFields.status && { status: updatedFields.status }) } },
-            { new: true, runValidators: true }
-        );
-    } else if (updatedFields.status) {
-        // Status was updated by service, fetch latest
-        finalOrder = await Order.findById(id);
-    } else {
-        // No specific updates required by the controller, fetch current state
-        finalOrder = existingOrder;
+    // --- Final Step: Refetch the order to get its absolute latest state ---
+    let finalOrder = await Order.findById(id);
+    if (!finalOrder || finalOrder.isDeleted) {
+        return res.status(404).json({ message: 'Pesanan bahan tidak ditemukan setelah pembaruan.' });
     }
 
+    // --- NEW LOGIC: Check if all items are accepted and update order status ---
+    if (finalOrder.items && finalOrder.items.length > 0) {
+        const allItemsAccepted = finalOrder.items.every(item => item.isAccepted === true);
+        let newOrderStatus = finalOrder.status; // Default to current status
 
-    if (!finalOrder) {
-      return res.status(404).json({ message: 'Pesanan bahan tidak ditemukan setelah pembaruan.' });
+        if (allItemsAccepted && finalOrder.status !== OrderStatuses.ACCEPTED) {
+            newOrderStatus = OrderStatuses.ACCEPTED;
+        } else if (!allItemsAccepted && finalOrder.status === OrderStatuses.ACCEPTED) {
+            // If it was accepted but now an item is unaccepted, revert to PROCESSED
+            newOrderStatus = OrderStatuses.PROCESSED;
+        }
+
+        // Only update if the determined new status is different from the current status
+        if (newOrderStatus !== finalOrder.status) {
+            const finalStatusUpdateResult = await orderFulfillmentService.updateOrderStatus(finalOrder._id, newOrderStatus, userContext);
+            if (!finalStatusUpdateResult.success) {
+                console.warn(`Failed to auto-update order status to ${newOrderStatus} for order ${finalOrder.code}: ${finalStatusUpdateResult.message}`);
+            } else {
+                // If successful, refetch to get the very latest state including the status change
+                finalOrder = await Order.findById(id);
+            }
+        }
     }
 
     res.status(200).json({

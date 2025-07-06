@@ -96,7 +96,7 @@ export const getBundles = async (req, res) => {
         if (populateFields.includes('categories')) query.populate('categories.menuCategoryId', 'name'); // Only fetch 'name' field of menu category
     } else {
         // Default to populate categories
-        query.populate('categories.menuCategoryId', 'name');
+        // query.populate('categories.menuCategoryId');
     }
 
     const bundles = await query.exec();
