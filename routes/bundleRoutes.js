@@ -1,11 +1,5 @@
 import express from 'express';
-import {
-    createBundle,
-    getBundles,
-    getBundleById,
-    updateBundle,
-    deleteBundle
-} from '../controllers/bundleController.js';
+import * as controller from '../controllers/bundleController.js';
 import protect from '../middleware/auth.js';
 import authorizeRoles from '../middleware/rbac.js';
 import { Roles } from '../constants/roles.js';
@@ -13,13 +7,13 @@ import { Roles } from '../constants/roles.js';
 const router = express.Router();
 
 router.route('/')
-    .get(getBundles)
-    .post(protect, authorizeRoles(Roles.admin), createBundle);
+    .get(controller.getBundles)
+    .post(protect, authorizeRoles(Roles.admin), controller.createBundle);
 
 router.route('/:id')
-    .get(getBundleById)
-    .put(protect, authorizeRoles(Roles.admin), updateBundle)
-    .delete(protect, authorizeRoles(Roles.admin), deleteBundle);
+    .get(controller.getBundleById)
+    .put(protect, authorizeRoles(Roles.admin), controller.updateBundle)
+    .delete(protect, authorizeRoles(Roles.admin), controller.deleteBundle);
 
 
 export default router;
