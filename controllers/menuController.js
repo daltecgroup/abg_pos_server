@@ -162,6 +162,7 @@ export const updateMenu = async (req, res) => {
     if (!mongoose.Types.ObjectId.isValid(id)) {
       return res.status(400).json({ message: 'Format ID Menu tidak valid.' });
     }
+    console.log(updateData);
 
     // --- Controller-side Validation for Update ---
     const errors = [];
