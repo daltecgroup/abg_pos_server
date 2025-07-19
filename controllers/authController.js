@@ -60,7 +60,9 @@ export const registerAdmin = async (req, res) => {
 // @access  Public
 export const authUser = async (req, res) => {
     const { userId, password } = req.body;
-
+    console.log(userId);
+    console.log(password);
+    
     try {
         const user = await User.findOne({ userId });
         
@@ -71,6 +73,7 @@ export const authUser = async (req, res) => {
 
         // check if user is innactive
         if(user && !user.isActive){
+            console.log(user.isActive);
             return res.status(404).json({ message: 'User is deactivated' });
         }
 

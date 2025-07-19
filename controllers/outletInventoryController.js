@@ -7,20 +7,20 @@ import mongoose from 'mongoose'; // For ObjectId validation
 // --- Helper Functions ---
 // (Reusing validateUserReference from other controllers if needed, or define here)
 const validateUserReference = async (userId, errorsArray, fieldName, requiredRole = null) => {
-    if (!userId || !mongoose.Types.ObjectId.isValid(userId)) {
-        errorsArray.push(`ID Pengguna tidak valid untuk ${fieldName}.`);
-        return null;
-    }
-    const user = await User.findById(userId); // Assuming User model is accessible
-    if (!user || user.isDeleted || !user.isActive) {
-        errorsArray.push(`Pengguna dengan ID '${userId}' untuk ${fieldName} tidak ditemukan, sudah dihapus, atau tidak aktif.`);
-        return null;
-    }
-    if (requiredRole && !user.roles.includes(requiredRole)) {
-        errorsArray.push(`Pengguna '${user.name}' (ID: '${userId}') untuk ${fieldName} bukan peran '${requiredRole}'.`);
-        return null;
-    }
-    return { userId: user._id, name: user.name };
+  if (!userId || !mongoose.Types.ObjectId.isValid(userId)) {
+    errorsArray.push(`ID Pengguna tidak valid untuk ${fieldName}.`);
+    return null;
+  }
+  const user = await User.findById(userId); // Assuming User model is accessible
+  if (!user || user.isDeleted || !user.isActive) {
+    errorsArray.push(`Pengguna dengan ID '${userId}' untuk ${fieldName} tidak ditemukan, sudah dihapus, atau tidak aktif.`);
+    return null;
+  }
+  if (requiredRole && !user.roles.includes(requiredRole)) {
+    errorsArray.push(`Pengguna '${user.name}' (ID: '${userId}') untuk ${fieldName} bukan peran '${requiredRole}'.`);
+    return null;
+  }
+  return { userId: user._id, name: user.name };
 };
 
 // --- CRUD Controller Functions for OutletInventory ---
@@ -34,14 +34,14 @@ export const getOutletInventories = async (req, res) => {
     const { outletId, ingredientId, minQty, maxQty } = req.query; // Add filters as needed
 
     if (outletId) {
-        if (!mongoose.Types.ObjectId.isValid(outletId)) return res.status(400).json({ message: 'Format ID Outlet tidak valid untuk filter.' });
-        filter._id = outletId; // Filter by the _id of the OutletInventory document (which is the outletId)
+      if (!mongoose.Types.ObjectId.isValid(outletId)) return res.status(400).json({ message: 'Format ID Outlet tidak valid untuk filter.' });
+      filter._id = outletId; // Filter by the _id of the OutletInventory document (which is the outletId)
     }
 
     // Filter by ingredient within the nested array
     if (ingredientId) {
-        if (!mongoose.Types.ObjectId.isValid(ingredientId)) return res.status(400).json({ message: 'Format ID Bahan tidak valid untuk filter.' });
-        filter['ingredients.ingredientId'] = ingredientId;
+      if (!mongoose.Types.ObjectId.isValid(ingredientId)) return res.status(400).json({ message: 'Format ID Bahan tidak valid untuk filter.' });
+      filter['ingredients.ingredientId'] = ingredientId;
     }
 
     // Filter by quantity range for a specific ingredient (more complex, might require aggregation)
@@ -51,8 +51,7 @@ export const getOutletInventories = async (req, res) => {
     // filter['ingredients'] = { $elemMatch: { ingredientId: 'someId', currentQty: { $lt: minQty } } };
 
     const outletInventories = await OutletInventory.find(filter)
-                                                  .populate('_id', 'name code address') // Populate the outlet details
-                                                  .sort({ createdAt: -1 });
+      .sort({ createdAt: -1 });
 
     res.status(200).json(outletInventories.map(inv => inv.toJSON()));
   } catch (error) {
@@ -71,32 +70,35 @@ export const getOutletInventoryById = async (req, res) => {
       return res.status(400).json({ message: 'Format ID Inventori Outlet tidak valid.' });
     }
 
-    const outletInventory = await OutletInventory.findById(id)
-                                                  .populate('_id', 'name code address'); // Populate the outlet details
+    const outletInventory = await OutletInventory.findById(id);
 
     if (!outletInventory || outletInventory.isDeleted === true) {
       return res.status(404).json({ message: 'Inventori Outlet tidak ditemukan atau sudah dihapus.' });
     }
 
+    if(req.user && req.user.roles.includes(Roles.admin)){
+      return res.status(200).json(outletInventory.toJSON());
+    }
+
     // Security check: If operator/franchisee, ensure they can only view their own outlet's inventory
     if (req.user && (req.user.roles.includes(Roles.operator) || req.user.roles.includes(Roles.franchisee))) {
-        // Find the outlets associated with this user
-        const userOutlets = await Outlet.find({
-            $or: [{ operators: req.user._id }, { franchisees: req.user._id }],
-            isDeleted: false
-        }).select('_id');
-        const userOutletIds = userOutlets.map(outlet => outlet._id.toString());
+      // Find the outlets associated with this user
+      const userOutlets = await Outlet.find({
+        $or: [{ operators: req.user._id }, { franchisees: req.user._id }],
+        isDeleted: false
+      }).select('_id');
+      const userOutletIds = userOutlets.map(outlet => outlet._id.toString());
 
-        if (!userOutletIds.includes(outletInventory._id.toString())) {
-            return res.status(403).json({ message: 'Anda tidak diizinkan untuk melihat inventori outlet ini.' });
-        }
+      if (!userOutletIds.includes(outletInventory._id.toString())) {
+        return res.status(403).json({ message: 'Anda tidak diizinkan untuk melihat inventori outlet ini.' });
+      }
     }
 
 
     res.status(200).json(outletInventory.toJSON());
   } catch (error) {
     if (error.name === 'CastError' && error.kind === 'ObjectId') {
-        return res.status(400).json({ message: 'Format ID Inventori Outlet tidak valid.' });
+      return res.status(400).json({ message: 'Format ID Inventori Outlet tidak valid.' });
     }
     console.error('Error getting outlet inventory by ID:', error);
     res.status(500).json({ message: 'Server error getting outlet inventory.', error: error.message });
@@ -107,10 +109,10 @@ export const getOutletInventoryById = async (req, res) => {
 // @route   GET /api/v1/outletinventory/byoutlet/:outletId
 // @access  Private (Admin, SPV Area, Franchisee/Operator for their own outlet)
 export const getOutletInventoryByOutletId = async (req, res) => {
-    // This is essentially the same as getOutletInventoryById, just with a clearer route name.
-    // Re-use the existing logic.
-    req.params.id = req.params.outletId; // Map outletId from path to 'id' for getOutletInventoryById
-    return getOutletInventoryById(req, res);
+  // This is essentially the same as getOutletInventoryById, just with a clearer route name.
+  // Re-use the existing logic.
+  req.params.id = req.params.outletId; // Map outletId from path to 'id' for getOutletInventoryById
+  return getOutletInventoryById(req, res);
 };
 
 // @desc    Update an outlet inventory (e.g., adjust reorder levels, isActive status)
@@ -146,7 +148,7 @@ export const updateOutletInventory = async (req, res) => {
       //   }
       //   // Add validation/logic for reorderLevel, maxStockLevel etc.
       // }
-        errors.push('Array bahan tidak dapat diperbarui langsung melalui endpoint ini. Gunakan transaksi inventori atau endpoint yang ditentukan untuk ambang batas reorder.');
+      errors.push('Array bahan tidak dapat diperbarui langsung melalui endpoint ini. Gunakan transaksi inventori atau endpoint yang ditentukan untuk ambang batas reorder.');
     }
 
     // Example of allowing updates to general inventory document fields (if added to schema)
@@ -171,7 +173,7 @@ export const updateOutletInventory = async (req, res) => {
 
   } catch (error) {
     if (error.name === 'CastError' && error.kind === 'ObjectId') {
-        return res.status(400).json({ message: 'Format ID Inventori Outlet tidak valid.' });
+      return res.status(400).json({ message: 'Format ID Inventori Outlet tidak valid.' });
     }
     if (error.name === 'ValidationError') {
       const errors = Object.keys(error.errors).map(key => error.errors[key].message);
@@ -194,7 +196,7 @@ export const deleteOutletInventory = async (req, res) => {
 
     // Security check: Only Admin can perform this soft delete
     if (!req.user || !req.user.roles || !req.user.roles.includes(Roles.admin)) {
-       return res.status(403).json({ message: 'Anda tidak memiliki izin untuk menghapus inventori outlet ini.' });
+      return res.status(403).json({ message: 'Anda tidak memiliki izin untuk menghapus inventori outlet ini.' });
     }
 
     const outletInventory = await OutletInventory.findByIdAndUpdate(
@@ -213,7 +215,7 @@ export const deleteOutletInventory = async (req, res) => {
     });
   } catch (error) {
     if (error.name === 'CastError' && error.kind === 'ObjectId') {
-        return res.status(400).json({ message: 'Format ID Inventori Outlet tidak valid.' });
+      return res.status(400).json({ message: 'Format ID Inventori Outlet tidak valid.' });
     }
     console.error('Error soft deleting outlet inventory:', error);
     res.status(500).json({ message: 'Server error soft-deleting outlet inventory.', error: error.message });

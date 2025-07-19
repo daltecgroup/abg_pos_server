@@ -16,13 +16,30 @@ const upload = multer({
   storage: storage,
   limits: { fileSize: 10 * 1024 * 1024 }, // Max 10MB for original file
   fileFilter: (req, file, cb) => {
-    const filetypes = /jpeg|jpg|png|gif|pdf/; // Allow PDF for payment evidence
-    const mimetype = filetypes.test(file.mimetype);
-    const extname = filetypes.test(path.extname(file.originalname).toLowerCase());
+    // List of allowed MIME types
+    const allowedMimeTypes = [
+      'image/jpeg',
+      'image/jpg',
+      'image/png',
+      'image/gif',
+      'application/pdf',
+    ];
+    
+    // Check if the file's MIME type is in the allowed list
+    const isMimeTypeAllowed = allowedMimeTypes.includes(file.mimetype);
 
-    if (mimetype && extname) {
+    // Also check the file extension as a second line of defense
+    const filetypesRegex = /jpeg|jpg|png|gif|pdf/;
+    const extname = filetypesRegex.test(path.extname(file.originalname).toLowerCase());
+
+    console.log(`File MIME type: ${file.mimetype}`);
+    console.log(`Is MIME type allowed? ${isMimeTypeAllowed}`);
+    console.log(`Is extension valid? ${extname}`);
+
+    if (isMimeTypeAllowed && extname) {
       return cb(null, true);
     }
+
     cb(new Error('Hanya file gambar (JPEG, JPG, PNG, GIF) atau PDF yang diizinkan untuk bukti pembayaran.'));
   }
 });

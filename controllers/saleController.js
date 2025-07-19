@@ -238,6 +238,7 @@ export const updateSale = async (req, res) => {
                     userId: userDetails.userId,
                     printedAt: new Date(),
                 });
+                existingSale.save();
                 // Remove the custom trigger field
                 delete updateData.addInvoicePrintHistory;
             }

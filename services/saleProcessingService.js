@@ -114,6 +114,7 @@ export const processNewSaleData = async (rawSaleData, reqUser, paymentEvidenceUr
         let itemSingleSubtotal = item.qty * menu.price;
         let itemSingleDiscountAmount = 0;
 
+        item.discount = menu.discount;
         if (item.discount !== undefined) {
           if (typeof item.discount !== 'number' || item.discount < 0 || item.discount > 100) {
             errors.push(`Diskon untuk menu '${menu.name}' tidak valid.`);
@@ -124,6 +125,7 @@ export const processNewSaleData = async (rawSaleData, reqUser, paymentEvidenceUr
         } else {
             item.discount = 0;
         }
+
 
         // Process addons for this single item
         const processedAddons = [];
@@ -144,7 +146,7 @@ export const processNewSaleData = async (rawSaleData, reqUser, paymentEvidenceUr
               qty: addonItem.qty,
               price: addon.price,
             });
-            itemSingleSubtotal += addonItem.qty * addon.price;
+            itemSingleSubtotal += addonItem.qty * addon.price * item.qty;
 
             // Add addon ingredients to ingredientsConsumedMap
             await addIngredientsToMap(addon.recipe, addonItem.qty);
