@@ -1,5 +1,6 @@
 import mongoose, { Schema, model } from 'mongoose';
 import { PaymentMethods } from '../constants/paymentMethods.js'; // Import PaymentMethods enum
+import { updateDailySaleReport } from '../services/dailySaleReportService.js';
 
 // --- Counter Schema for Sale Codes with Daily & Outlet-Specific Reset ---
 // This counter needs to track sequence per day AND per outlet.
@@ -270,6 +271,19 @@ SaleSchema.pre('findOneAndUpdate', function(next) {
       update.deletedAt = new Date();
     }
     // In a real application, you'd typically get the deletedBy user ID from the request context (e.g., req.user.id)
+  }
+  next();
+});
+
+// NEW: Post-save hook to update the daily sales report
+SaleSchema.post('save', async function(doc, next) {
+  // 'doc' is the sale document that was just saved
+  try {
+    await updateDailySaleReport(doc);
+  } catch (error) {
+    console.error(`Error in Sale post-save hook updating daily report for sale ${doc.code}:`, error);
+    // Decide if you want to block the sale save if daily report update fails.
+    // For now, it just logs and continues.
   }
   next();
 });
