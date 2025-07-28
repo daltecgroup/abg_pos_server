@@ -43,7 +43,7 @@ const getPaymentEvidenceUrl = (req) => {
 export const createSale = async (req, res) => {
   try {
     const paymentEvidenceUrl = getPaymentEvidenceUrl(req);
-
+  
     // Delegate processing and validation to the service
     const { saleData, errors } = await saleProcessingService.processNewSaleData(
         req.body,
