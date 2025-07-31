@@ -9,7 +9,6 @@ import * as saleProcessingService from '../services/saleProcessingService.js'; /
 import { TransactionTypes } from '../constants/transactionTypes.js'; // NEW: Import TransactionTypes
 import { SourceTypes } from '../constants/sourceTypes.js';
 import * as outletInventoryTransactionController from './outletInventoryTransactionController.js';
-import { ref } from 'process';
 
 // Helper to validate User references (kept here as it's a general controller utility)
 const validateUserReference = async (userId, errorsArray, fieldName, requiredRole = null) => {
