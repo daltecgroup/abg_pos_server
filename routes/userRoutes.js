@@ -11,7 +11,7 @@ router.route('/')
   .post(protect, authorizeRoles(Roles.admin), controller.createUser);
 
 router.route('/sync')
-  .post(protect, authorizeRoles(Roles.admin), controller.syncUsers);
+  .post(protect, controller.syncUsers);
 
 router.route('/:id')
   .get(protect, controller.getUserById)

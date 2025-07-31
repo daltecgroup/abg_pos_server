@@ -16,8 +16,7 @@ const OutletInventorySchema = new Schema({
       },
       currentQty: {
         type: Number,
-        required: true,
-        min: 0, // Quantity should not go below zero for physical stock
+        required: true,// Quantity should not go below zero for physical stock
         default: 0,
       },
       // Snapshots of ingredient details for quick reference
