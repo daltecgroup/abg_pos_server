@@ -170,7 +170,7 @@ export const createOutletInventoryTransaction = async (req, res) => {
             notes,
             createdBy: createdBySnapshot,
             evidenceUrl,
-            isValid: false, // Default to false, waiting for Admin/SPV Area validation
+            isValid: true, // Default to false, waiting for Admin/SPV Area validation
             isCalculated: false, // Default to false, waiting for sync service
         };
 
