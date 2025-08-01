@@ -86,7 +86,7 @@ const processAndSavePaymentEvidence = async (req, res, next) => {
               .toBuffer();
           }
 
-          if (finalBuffer.length > 500 * 1024) {
+          if (finalBuffer.length > 5000 * 1024) {
               console.warn(`Ukuran gambar bukti pembayaran masih melebihi 500KB setelah kompresi maksimal. Ukuran: ${finalBuffer.length / 1024}KB`);
           }
 

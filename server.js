@@ -25,6 +25,7 @@ import dataInitRoutes from './routes/dataInitRoutes.js';
 import dailySaleReportRoutes from './routes/dailySaleReportRoutes.js';
 import promoSettingRoutes from './routes/promoSettingRoutes.js'; // NEW: Import promo setting routes
 import DailyOutletSaleReport from './models/DailyOutletSaleReport.js'; // NEW: Import DailyOutletSaleReport model
+import userOutletRoutes from './routes/userOutletRoutes.js';
 
 const app = express();
 const server = http.createServer(app);
@@ -73,6 +74,7 @@ app.use('/api/v1/outletinventory', outletInventoryRoutes);
 app.use('/api/v1/data-init', dataInitRoutes);
 app.use('/api/v1/promosettings', promoSettingRoutes);
 app.use('/api/v1/dailyoutletsalereports', dailySaleReportRoutes);
+app.use('/api/v1/useroutlets', userOutletRoutes);
 
 // Basic route for testing server status
 app.get('/api/v1', (req, res) => {
