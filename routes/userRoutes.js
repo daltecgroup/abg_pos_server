@@ -7,7 +7,7 @@ import { Roles } from '../constants/roles.js';
 const router = express.Router();
 
 router.route('/')
-  .get(protect, authorizeRoles(Roles.admin), controller.getUsers)
+  .get(protect, controller.getUsers)
   .post(protect, authorizeRoles(Roles.admin), controller.createUser);
 
 router.route('/sync')
