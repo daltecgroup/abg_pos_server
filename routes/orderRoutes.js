@@ -10,7 +10,7 @@ const router = express.Router();
 // --- Order Routes ---
 // Base URL for these routes is /api/v1/orders
 router.route('/')
-  .post(protect, protect, controller.createOrder)
+  .post(protect, controller.createOrder)
   .get(protect, controller.getOrders);
 
 router.route('/:id')
