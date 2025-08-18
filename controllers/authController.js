@@ -60,8 +60,7 @@ export const registerAdmin = async (req, res) => {
 // @access  Public
 export const authUser = async (req, res) => {
     const { userId, password } = req.body;
-    console.log(userId);
-    console.log(password);
+    console.log(`User logging in: ${userId}`);
     
     try {
         const user = await User.findOne({ userId });
