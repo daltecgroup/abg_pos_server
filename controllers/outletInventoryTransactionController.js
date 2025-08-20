@@ -1,3 +1,5 @@
+// controllers/outletInventoryTransactionController.js
+
 import OutletInventoryTransaction from '../models/OutletInventoryTransaction.js';
 import Outlet from '../models/Outlet.js';
 import Ingredient from '../models/Ingredient.js';
@@ -7,9 +9,13 @@ import { SourceTypes } from '../constants/sourceTypes.js';
 import { Roles } from '../constants/roles.js';
 import mongoose from 'mongoose';
 import multer from 'multer'; // For Multer error handling
+import fs from 'fs/promises'; // For file system operations
 
 // NEW: Import the new service layer
 import * as outletInventoryService from '../services/outletInventoryService.js';
+// NEW: Import UserOutlet model
+import UserOutlet from '../models/UserOutlet.js';
+import { fail } from 'assert';
 
 
 // --- Helper Functions ---
@@ -33,24 +39,30 @@ const validateUserReference = async (userId, errorsArray, fieldName, requiredRol
 };
 
 // Helper for evidence URL
-const getEvidenceUrl = (req, uploadDirectory) => {
-    if (req.file) {
-        return `/${uploadDirectory}/${req.file.filename}`;
+const getEvidenceUrl = (file, uploadDirectory) => {
+    if (file) {
+        return `/${uploadDirectory}/${file.filename}`;
     }
     return null;
 };
 
-// --- CRUD Controller Functions for OutletInventoryTransaction ---
+/**
+ * Internal helper to process and create a single OutletInventoryTransaction.
+ * This function handles validation, data snapshots, OIT creation, and inventory syncing.
+ * It does NOT send an HTTP response directly.
+ *
+ * @param {object} transactionDataPayload - The data for a single OIT (from req.body or array item).
+ * @param {object} authenticatedUser - The authenticated user object (e.g., req.user).
+ * @param {object|null} uploadedFile - The Multer file object if any, for evidence.
+ * @returns {Promise<{success: boolean, message: string, transaction?: object, errors?: string[], fileToDelete?: string}>}
+ */
+const _processSingleOutletInventoryTransaction = async (transactionDataPayload, authenticatedUser, uploadedFile = null) => {
+    const { ingredientId, outletId, sourceType, ref, transactionType, notes } = transactionDataPayload;
+    let qty = transactionDataPayload.qty; // Use let as it might be parsed
+    const errors = [];
+    let fileToDelete = null; // Path to file if uploaded but validation fails
 
-// @desc    Create a new outlet inventory transaction
-// @route   POST /api/v1/outletinventorytransactions
-// @access  Private (Operator, Admin, SPV Area - depending on transaction type)
-export const createOutletInventoryTransaction = async (req, res) => {
-    let createdTransaction = null; // Store for potential service call or rollback
     try {
-        let { ingredientId, outletId, sourceType, ref, transactionType, qty, notes } = req.body;
-        const errors = [];
-
         // --- Basic Validation ---
         if (!ingredientId || !mongoose.Types.ObjectId.isValid(ingredientId)) {
             errors.push('ID Bahan tidak valid.');
@@ -67,21 +79,21 @@ export const createOutletInventoryTransaction = async (req, res) => {
         if (!Object.values(TransactionTypes).includes(transactionType)) {
             errors.push('Jenis transaksi tidak valid.');
         }
-        if (qty === undefined || typeof qty === 'string') { // Allow string, parse it
+        if (qty === undefined || typeof qty === 'string') {
             const parsedQty = parseFloat(qty);
             if (isNaN(parsedQty)) {
                 errors.push('Jumlah (qty) harus berupa angka yang valid.');
             } else {
-                qty = parsedQty; // Update qty to its numeric value
+                qty = parsedQty;
             }
         }
-        if (typeof qty !== 'number') { // Final check after potential parsing
+        if (typeof qty !== 'number') {
             errors.push('Jumlah (qty) diperlukan dan harus berupa angka.');
         }
         if (notes !== undefined && typeof notes !== 'string') {
             errors.push('Catatan harus berupa string.');
         } else if (notes !== undefined) {
-            notes = notes.trim();
+            transactionDataPayload.notes = notes.trim(); // Update the payload's notes
         }
 
 
@@ -114,17 +126,17 @@ export const createOutletInventoryTransaction = async (req, res) => {
             };
         }
 
-        // CreatedBy (from req.user)
-        if (!req.user || !req.user._id || !req.user.name) {
+        // CreatedBy (from authenticatedUser)
+        if (!authenticatedUser || !authenticatedUser._id || !authenticatedUser.name) {
             errors.push('Informasi pengguna pembuat tidak tersedia. Pastikan pengguna terautentikasi.');
         } else {
-            const user = await validateUserReference(req.user._id, errors, 'pembuat transaksi');
+            const user = await validateUserReference(authenticatedUser._id, errors, 'pembuat transaksi');
             if (user) {
                 createdBySnapshot = { userId: user.userId, name: user.name };
             }
         }
 
-        // --- Transaction-specific Quantity Validation (before model's pre-save adjusts sign) ---
+        // --- Transaction-specific Quantity Validation ---
         switch (transactionType) {
             case TransactionTypes.IN:
                 if (qty <= 0) errors.push('Jumlah (qty) untuk transaksi "IN" harus positif.');
@@ -138,85 +150,74 @@ export const createOutletInventoryTransaction = async (req, res) => {
                 break;
         }
 
-
         // Handle evidence file upload
-        const evidenceUrl = getEvidenceUrl(req, 'uploads/inventory_evidence');
-        // You can add logic here if evidence is mandatory for certain transaction types
-        // For example: if (transactionType === TransactionTypes.ADJUSTMENT && !evidenceUrl) errors.push('Bukti diperlukan untuk penyesuaian.');
+        const evidenceUrl = getEvidenceUrl(uploadedFile, 'uploads/inventory_evidence');
+        if (uploadedFile && errors.length > 0) {
+            fileToDelete = uploadedFile.path; // Mark file for deletion if initial validation fails
+        }
 
 
         if (errors.length > 0) {
-            // If a file was uploaded but validation fails, delete the uploaded file
-            if (req.file) {
-                const fs = await import('fs/promises');
-                try {
-                    await fs.unlink(req.file.path);
-                    console.log(`Deleted redundant uploaded file: ${req.file.path}`);
-                } catch (fileErr) {
-                    console.error(`Error deleting redundant file ${req.file.path}:`, fileErr);
-                }
-            }
-            return res.status(400).json({ message: 'Validasi gagal.', errors });
+            return { success: false, message: 'Validasi gagal.', errors, fileToDelete };
         }
 
         // Construct transaction data
         const transactionData = {
             ingredient: ingredientSnapshot,
-            price: ingredientDoc.price, // Snapshot current ingredient price
+            price: ingredientDoc.price,
             outlet: outletSnapshot,
             source: { sourceType, ref },
             transactionType,
             qty, // Qty will be adjusted for sign by model's pre-save hook
-            notes,
+            notes: transactionDataPayload.notes, // Use the trimmed notes
             createdBy: createdBySnapshot,
             evidenceUrl,
-            isValid: true, // Default to false, waiting for Admin/SPV Area validation
+            isValid: true, // Default to true for transactions created via controller, can be overridden by specific logic
             isCalculated: false, // Default to false, waiting for sync service
         };
 
         const newTransaction = await OutletInventoryTransaction.create(transactionData);
-        createdTransaction = newTransaction; // Store the created transaction
 
-        // NEW: Call the service to sync the outlet inventory
-        // The service will set isCalculated to true if successful
+        // Call the service to sync the outlet inventory
         const syncSuccess = await outletInventoryService.syncOutletInventory(
             newTransaction,
-            { userId: req.user._id, userName: req.user.name } // Pass user context
+            { userId: authenticatedUser._id, userName: authenticatedUser.name }
         );
 
         if (!syncSuccess) {
-            // If sync fails here, log error. Consider rolling back OIT isValid to false if critical.
-            // For now, proceed but it means inventory might be inconsistent.
-            console.warn(`Failed to sync OutletInventory for new transaction ${newTransaction.id}.`);
+            console.warn(`Failed to sync OutletInventory for new transaction ${newTransaction.id}. Manual intervention might be required.`);
+            // Decide how to handle a sync failure. For critical applications, you might
+            // want to mark the OIT as invalid or rollback. For now, it logs a warning.
         }
 
-
-        res.status(201).json({
-            message: 'Transaksi inventori outlet berhasil dicatat.',
-            transaction: newTransaction.toJSON(),
-        });
+        return { success: true, message: 'Transaksi inventori outlet berhasil dicatat.', transaction: newTransaction.toJSON() };
 
     } catch (error) {
-        // If a file was uploaded but an unexpected error occurs, delete the uploaded file
-        if (req.file) {
-            const fs = await import('fs/promises');
-            try {
-                await fs.unlink(req.file.path);
-                console.log(`Deleted redundant uploaded file: ${req.file.path}`);
-            } catch (fileErr) {
-                console.error(`Error deleting redundant file ${req.file.path}:`, fileErr);
-            }
+        console.error('Error in _processSingleOutletInventoryTransaction:', error);
+        return { success: false, message: `Kesalahan saat memproses transaksi: ${error.message}`, errors: [error.message], fileToDelete };
+    }
+};
+
+
+// @desc    Create a new outlet inventory transaction
+// @route   POST /api/v1/outletinventorytransactions
+// @access  Private (Operator, Admin, SPV Area - depending on transaction type)
+export const createOutletInventoryTransaction = async (req, res) => {
+    try {
+        const result = await _processSingleOutletInventoryTransaction(req.body, req.user, req.file);
+
+        if (result.fileToDelete) {
+            try { await fs.unlink(result.fileToDelete); } catch (fileErr) { console.error(`Error deleting redundant file ${result.fileToDelete}:`, fileErr); }
         }
-        if (error.code === 11000) {
-            const field = Object.keys(error.keyValue)[0];
-            const value = error.keyValue[field];
-            return res.status(409).json({ message: `Transaksi inventori dengan ${field} '${value}' sudah ada.` });
+
+        if (result.success) {
+            res.status(201).json({ message: result.message, transaction: result.transaction });
+        } else {
+            res.status(400).json({ message: result.message, errors: result.errors });
         }
-        if (error.name === 'ValidationError') {
-            const errors = Object.keys(error.errors).map(key => error.errors[key].message);
-            return res.status(400).json({ message: 'Validasi gagal.', errors });
-        }
-        // Handle Multer-specific errors
+
+    } catch (error) {
+        // Handle Multer-specific errors that might occur before _processSingleOutletInventoryTransaction is called
         if (error instanceof multer.MulterError) {
             if (error.code === 'LIMIT_FILE_SIZE') {
                 return res.status(400).json({ message: 'Ukuran file terlalu besar. Maksimal 10MB.' });
@@ -231,6 +232,94 @@ export const createOutletInventoryTransaction = async (req, res) => {
     }
 };
 
+// @desc    Create multiple outlet inventory transactions from a list
+// @route   POST /api/v1/outletinventorytransactions/bulk
+// @access  Private (Admin, SPV Area, or specific roles that can bulk create)
+export const createMultipleOutletInventoryTransactions = async (req, res) => {
+    try {
+        const transactionsToCreate = req.body;
+        const results = [];
+        const filesToDelete = [];
+
+        if (!Array.isArray(transactionsToCreate) || transactionsToCreate.length === 0) {
+            return res.status(400).json({ message: 'Payload harus berupa array transaksi non-kosong.' });
+        }
+
+        // Multer only handles one file per request. If multiple files are expected for bulk upload,
+        // you'd need a different multer setup (e.g., array('evidenceFiles')) and map them to transactions.
+        // For simplicity, this assumes either no file, or if a file is uploaded with bulk,
+        // it applies to the first transaction or is ignored for subsequent ones.
+        // For distinct files per transaction in a bulk request, the client would need to send
+        // multiple requests or a more complex multipart form data structure.
+        const singleFile = req.file; // If a single file was uploaded with the bulk request
+
+        for (let i = 0; i < transactionsToCreate.length; i++) {
+            const transactionPayload = transactionsToCreate[i];
+            // Pass the single file only to the first transaction, or if your logic implies it's for one
+            const fileForThisTransaction = (i === 0) ? singleFile : null;
+
+            const result = await _processSingleOutletInventoryTransaction(
+                transactionPayload,
+                req.user,
+                fileForThisTransaction
+            );
+            results.push({ index: i, ...result });
+
+            if (result.fileToDelete) {
+                filesToDelete.push(result.fileToDelete);
+            }
+        }
+
+        // Clean up any files marked for deletion
+        for (const filePath of filesToDelete) {
+            try {
+                await fs.unlink(filePath);
+                console.log(`Deleted redundant uploaded file after bulk processing: ${filePath}`);
+            } catch (fileErr) {
+                console.error(`Error deleting redundant file ${filePath} after bulk processing:`, fileErr);
+            }
+        }
+
+        const successfulCreations = results.filter(r => r.success);
+        const failedCreations = results.filter(r => !r.success);
+
+        console.log(failedCreations);
+
+        if (failedCreations.length === 0) {
+            res.status(201).json({
+                message: 'Semua transaksi inventori outlet berhasil dicatat.',
+                results: results.map(r => ({ index: r.index, success: r.success, message: r.message, transaction: r.transaction }))
+            });
+        } else if (successfulCreations.length === 0) {
+            res.status(400).json({
+                message: 'Semua transaksi gagal dicatat.',
+                results: results.map(r => ({ index: r.index, success: r.success, message: r.message, errors: r.errors }))
+            });
+        } else {
+            res.status(207).json({ // 207 Multi-Status
+                message: 'Beberapa transaksi berhasil dicatat, beberapa gagal.',
+                successful: successfulCreations.map(r => ({ index: r.index, message: r.message, transaction: r.transaction })),
+                failed: failedCreations.map(r => ({ index: r.index, message: r.message, errors: r.errors }))
+            });
+        }
+
+    } catch (error) {
+        // Handle Multer-specific errors at the top level
+        if (error instanceof multer.MulterError) {
+            if (error.code === 'LIMIT_FILE_SIZE') {
+                return res.status(400).json({ message: 'Ukuran file terlalu besar. Maksimal 10MB.' });
+            }
+            return res.status(400).json({ message: `Kesalahan unggah file: ${error.message}` });
+        }
+        if (error.message.includes('Hanya file gambar')) { // Custom fileFilter error
+            return res.status(400).json({ message: error.message });
+        }
+        console.error('Kesalahan saat membuat banyak transaksi inventori outlet:', error);
+        res.status(500).json({ message: 'Kesalahan server saat membuat banyak transaksi inventori outlet.', error: error.message });
+    }
+};
+
+
 // @desc    Get all outlet inventory transactions
 // @route   GET /api/v1/outletinventorytransactions
 // @access  Private (Admin, SPV Area, potentially Operator for their outlet)
@@ -238,6 +327,22 @@ export const getOutletInventoryTransactions = async (req, res) => {
     try {
         const filter = { isDeleted: false };
         const { outletId, ingredientId, transactionType, sourceType, dateFrom, dateTo, isValid, isCalculated } = req.query;
+
+        // NEW: If outletId is provided in the filter, update the user's currentOutlet
+        if (outletId && req.user && req.user._id && mongoose.Types.ObjectId.isValid(outletId)) {
+            try {
+                // Find and update, or create if not exist (upsert: true)
+                await UserOutlet.findByIdAndUpdate(
+                    req.user._id,
+                    { currentOutlet: outletId },
+                    { upsert: true, new: true }
+                );
+            } catch (userOutletError) {
+                console.warn(`Failed to update UserOutlet for user ${req.user._id} with outlet ${outletId}:`, userOutletError.message);
+                // Do not block the request if this update fails, it's a secondary function
+            }
+        }
+
 
         if (outletId) {
             if (!mongoose.Types.ObjectId.isValid(outletId)) { return res.status(400).json({ message: 'ID Outlet tidak valid untuk filter.' }); }
