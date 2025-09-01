@@ -55,6 +55,7 @@ app.use('/uploads/attendance/evidence', express.static(path.join('uploads', 'att
 // Payment evidence files: accessible via /uploads/payment/evidence/filename.webp or .pdf
 app.use('/uploads/payment/evidence', express.static(path.join('uploads', 'payment', 'evidence'))); // MODIFIED: Path changed
 app.use('/uploads/inventory_evidence', express.static(path.join('uploads', 'inventory_evidence')));
+app.use('/uploads/user', express.static(path.join('uploads', 'user')));
 
 // Routes
 app.use('/api/v1/address', addressRoutes);

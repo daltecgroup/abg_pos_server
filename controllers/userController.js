@@ -2,6 +2,15 @@ import User from '../models/User.js'
 import { Roles } from '../constants/roles.js'
 import { ErrorCode } from '../constants/errorCode.js';
 
+// Helper for image upload path for payment evidence (kept here as it's related to multer middleware)
+const getProfileImageUrl = (req) => {
+  if (req.file) {
+    // Assuming Multer and image processing middleware save to /uploads/payment_evidence
+    return `/uploads/user/${req.file.filename}`;
+  }
+  return null;
+};
+
 // @desc    Create a new user
 // @route   POST api/v1/users
 // @access  Private/Admin
@@ -294,6 +303,32 @@ export const softDeleteUserById = async (req, res) => {
 
     res.status(200).json({
       message: 'Data Pengguna berhasil dihapus',
+    });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+};
+
+// @desc    Update a user profile by ID
+// @route   PUT /api/v1/users/:id/profile
+// @access  Private/Admin
+export const updateUserProfileById = async (req, res) => {
+  try {
+    
+    const updatedUser = await User.findOneAndUpdate(
+      { _id: req.params.id },
+      { imgUrl: getProfileImageUrl(req)},
+      { new: true }
+    );
+    console.log('here');
+
+    if (!updatedUser) {
+      return res.status(404).json({ message: 'Pengguna tidak ditemukan' });
+    }
+
+    res.status(200).json({
+      message: 'Data Pengguna berhasil diubah',
+      user: updatedUser
     });
   } catch (error) {
     res.status(500).json({ message: 'Server error', error: error.message });

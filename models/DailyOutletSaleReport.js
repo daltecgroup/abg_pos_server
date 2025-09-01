@@ -67,6 +67,7 @@ const DailyOutletSaleReportSchema = new Schema({
     getters: true,
     transform: (doc, ret) => {
       delete ret.__v;
+      delete ret._id;
       // The _id is already the report code, so no need for a separate 'id' virtual
       return ret;
     }
