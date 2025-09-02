@@ -56,6 +56,7 @@ app.use('/uploads/attendance/evidence', express.static(path.join('uploads', 'att
 app.use('/uploads/payment/evidence', express.static(path.join('uploads', 'payment', 'evidence'))); // MODIFIED: Path changed
 app.use('/uploads/inventory_evidence', express.static(path.join('uploads', 'inventory_evidence')));
 app.use('/uploads/user', express.static(path.join('uploads', 'user')));
+app.use('/uploads/menu', express.static(path.join('uploads', 'menu')));
 
 // Routes
 app.use('/api/v1/address', addressRoutes);

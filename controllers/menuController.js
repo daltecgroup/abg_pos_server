@@ -1,10 +1,15 @@
-// controllers/menuController.js
-
 import Menu from '../models/Menu.js';
 import MenuCategory from '../models/MenuCategory.js'; // For category validation
 import Ingredient from '../models/Ingredient.js'; // NEW: For ingredient validation in recipe
 import mongoose from 'mongoose'; // For ObjectId validation
 import * as productCompositionService from '../services/productCompositionService.js'; // NEW: Import the new service
+
+const getImageUrl = (req) => {
+  if (req.file) {
+    return `/uploads/menu/${req.file.filename}`;
+  }
+  return null;
+};
 
 // --- CRUD Controller Functions for Menu ---
 
@@ -277,5 +282,30 @@ export const deleteMenu = async (req, res) => {
     }
     console.error('Kesalahan saat menghapus menu:', error);
     res.status(500).json({ message: 'Kesalahan server saat menghapus menu.', error: error.message });
+  }
+};
+
+// @desc    Update menu image by ID
+// @route   PUT /api/menus/:id/image
+// @access  Private
+export const updateMenuImage = async (req, res) => {
+  try {
+    
+    const updatedMenu = await Menu.findOneAndUpdate(
+      { _id: req.params.id },
+      { image: getImageUrl(req)},
+      { new: true }
+    );
+
+    if (!updatedMenu) {
+      return res.status(404).json({ message: 'Menu tidak ditemukan' });
+    }
+
+    res.status(200).json({
+      message: 'Gambar menu berhasil diubah',
+      menu: updatedMenu.toJSON()
+    });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error', error: error.message });
   }
 };

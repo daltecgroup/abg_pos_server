@@ -41,7 +41,6 @@ const upload = multer({
   }
 });
 
-// Middleware to resize/optimize image and save, or just save PDF
 const processAndSaveUserProfile = async (req, res, next) => {
   
   if (!req.file) {
