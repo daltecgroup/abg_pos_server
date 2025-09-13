@@ -48,8 +48,10 @@ export const createUser = async (req, res) => {
         errors.push('ID Pengguna harus berupa string non-kosong jika disediakan.');
       } else {
         const existingUser = await User.findOne({ userId: userId.trim().toUpperCase() });
-        if (existingUser) {
+        if (existingUser && !existingUser.isDeleted) {
           errors.push(`ID Pengguna '${userId}' sudah terdaftar.`);
+        } else {
+          await User.findOneAndDelete({ userId: userId.trim().toUpperCase() });
         }
       }
     }
