@@ -116,6 +116,19 @@ const SaleSchema = new Schema({
       _id: false
     }
   ],
+  itemAddon: [ // [BARU] Array untuk Addon yang dijual terpisah (Standalone)
+    {
+      addonId: {
+        type: Schema.Types.ObjectId,
+        ref: 'Addon',
+        required: true,
+      },
+      name: { type: String, required: true, trim: true },
+      qty: { type: Number, required: true, min: 1 },
+      price: { type: Number, required: true, min: 0 }, // Harga saat transaksi
+      _id: false
+    }
+  ],
   totalPrice: { // Total calculated price of the entire sale
     type: Number,
     required: true,

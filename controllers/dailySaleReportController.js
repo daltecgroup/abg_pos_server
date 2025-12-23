@@ -1,75 +1,127 @@
 import DailyOutletSaleReport from '../models/DailyOutletSaleReport.js';
-import mongoose from 'mongoose'; // For ObjectId validation (though _id is string here)
+import mongoose from 'mongoose';
+// Import fungsi regenerasi yang sudah kita buat sebelumnya
+import { regenerateDailySaleReport } from '../services/dailySaleReportService.js';
 
 // @desc    Get a single daily outlet sale report by ID
 // @route   GET /api/v1/dailyoutletsalereports/:id
-// @access  Private (Admin, SPV Area, or Operator for their outlet)
 export const getDailyOutletSaleReportById = async (req, res) => {
   try {
     const { id } = req.params;
 
-    // The ID format is `${outletId}_${YYMMDD}`. While it's a string,
-    // we can still do some basic validation if needed, but Mongoose will handle
-    // if it doesn't match a document.
-    // For example, you could check if it contains '_' and if the outletId part is a valid ObjectId.
     const idParts = id.split('_');
     if (idParts.length !== 2 || !mongoose.Types.ObjectId.isValid(idParts[0])) {
-        return res.status(400).json({ message: 'Format ID Laporan Penjualan Harian Outlet tidak valid. Harap gunakan format OutletID_YYMMDD.' });
+        return res.status(400).json({ message: 'Format ID Laporan tidak valid. Gunakan OutletID_YYMMDD.' });
     }
 
-    const report = await DailyOutletSaleReport.findById(id);
+    // 1. Coba cari laporan secara normal
+    let report = await DailyOutletSaleReport.findById(id);
 
+    // 2. Jika tidak ditemukan, coba GENERATE ULANG (Self-Healing)
     if (!report) {
-      return res.status(404).json({ message: 'Laporan penjualan harian outlet tidak ditemukan.' });
+      console.warn(`Laporan ${id} tidak ditemukan. Memulai regenerasi otomatis...`);
+      const regenerationResult = await regenerateDailySaleReport(id);
+      
+      if (regenerationResult.success) {
+        report = regenerationResult.data;
+        console.log(`Laporan ${id} berhasil diregenerasi.`);
+      } else {
+        // Jika tetap gagal (memang tidak ada sale), return 404
+        return res.status(404).json({ message: 'Laporan tidak ditemukan dan tidak ada data penjualan untuk dibuat.' });
+      }
     }
-
-    // Optional: Implement authorization logic here
-    // For example, if req.user is an operator, ensure report.outlet.outletId matches req.user's outlet.
-    // if (req.user && req.user.roles.includes(Roles.operator)) {
-    //   if (report.outlet.outletId.toString() !== req.user.outletId.toString()) { // Assuming req.user has outletId
-    //     return res.status(403).json({ message: 'Anda tidak diizinkan untuk melihat laporan ini.' });
-    //   }
-    // }
 
     res.status(200).json(report.toJSON());
   } catch (error) {
-    console.error('Kesalahan saat mengambil laporan penjualan harian outlet berdasarkan ID:', error);
-    res.status(500).json({ message: 'Kesalahan server saat mengambil laporan penjualan harian outlet.', error: error.message });
+    console.error('Kesalahan server:', error);
+    res.status(500).json({ message: 'Kesalahan server.', error: error.message });
   }
 };
 
-// @desc    Get all daily outlet sale reports
+// @desc    Get all daily outlet sale reports (dengan fitur Auto-Fill Gaps)
 // @route   GET /api/v1/dailyoutletsalereports
-// @access  Private (Admin, SPV Area)
 export const getDailyOutletSaleReports = async (req, res) => {
   try {
     const filter = {};
-    const { outletId, dateFrom, dateTo } = req.query;
+    const { outletId, dateFrom, dateTo, recalculate } = req.query; // Tambah parameter optional 'recalculate'
 
+    // Validasi Outlet ID
     if (outletId) {
       if (!mongoose.Types.ObjectId.isValid(outletId)) {
-        return res.status(400).json({ message: 'ID Outlet tidak valid untuk filter.' });
+        return res.status(400).json({ message: 'ID Outlet tidak valid.' });
       }
       filter['outlet.outletId'] = outletId;
     }
+
+    // Validasi Tanggal
+    let startDate, endDate;
     if (dateFrom || dateTo) {
       filter.date = {};
       if (dateFrom) {
-        const d = new Date(dateFrom);
-        if (isNaN(d.getTime())) { return res.status(400).json({ message: 'Format tanggal "dateFrom" tidak valid.' }); }
-        filter.date.$gte = new Date(d.setUTCHours(0,0,0,0));
+        startDate = new Date(dateFrom);
+        if (isNaN(startDate.getTime())) return res.status(400).json({ message: 'Format dateFrom salah.' });
+        filter.date.$gte = new Date(startDate.setUTCHours(0,0,0,0));
       }
       if (dateTo) {
-        const d = new Date(dateTo);
-        if (isNaN(d.getTime())) { return res.status(400).json({ message: 'Format tanggal "dateTo" tidak valid.' }); }
-        filter.date.$lte = new Date(d.setUTCHours(23,59,59,999));
+        endDate = new Date(dateTo);
+        if (isNaN(endDate.getTime())) return res.status(400).json({ message: 'Format dateTo salah.' });
+        filter.date.$lte = new Date(endDate.setUTCHours(23,59,59,999));
       }
     }
 
-    const reports = await DailyOutletSaleReport.find(filter).sort({ date: -1, 'outlet.name': 1 });
+    // 1. Ambil Laporan yang Sudah Ada di Database
+    let reports = await DailyOutletSaleReport.find(filter).sort({ date: -1, 'outlet.name': 1 });
+
+    // 2. LOGIKA "GAP FILLING" (Hanya jalan jika Outlet & Range Tanggal spesifik dipilih)
+    if (outletId && dateFrom && dateTo) {
+      
+      const existingReportIds = new Set(reports.map(r => r._id.toString()));
+      const missingReportIds = [];
+
+      // Loop dari startDate sampai endDate untuk mencari tanggal yang bolong
+      let loopDate = new Date(startDate);
+      while (loopDate <= endDate) {
+        // Format ID: YYMMDD
+        const formattedDate = `${String(loopDate.getFullYear()).slice(-2)}${String(loopDate.getMonth() + 1).padStart(2, '0')}${String(loopDate.getDate()).padStart(2, '0')}`;
+        const potentialReportId = `${outletId}_${formattedDate}`;
+
+        // Jika ID ini tidak ada di hasil database ATAU user minta force recalculate
+        if (!existingReportIds.has(potentialReportId) || recalculate === 'true') {
+          missingReportIds.push(potentialReportId);
+        }
+
+        // Lanjut ke hari berikutnya
+        loopDate.setDate(loopDate.getDate() + 1);
+      }
+
+      // Jika ada laporan yang hilang/perlu direfresh, regenerate sekarang
+      if (missingReportIds.length > 0) {
+        console.log(`[GAP FILLING] Mencoba regenerasi untuk: ${missingReportIds.join(', ')}`);
+        
+        // Proses secara parallel (Promise.all) agar cepat
+        const regenerationPromises = missingReportIds.map(id => regenerateDailySaleReport(id));
+        const results = await Promise.all(regenerationPromises);
+
+        // Masukkan hasil yang sukses ke dalam list 'reports'
+        for (const res of results) {
+          if (res.success && res.data) {
+            // Jika recalculate=true, kita harus replace data lama di array 'reports'
+            if (recalculate === 'true') {
+               reports = reports.filter(r => r._id !== res.data._id); // Buang yang lama
+            }
+            reports.push(res.data); // Masukkan yang baru
+          }
+        }
+        
+        // Sort ulang karena ada data baru yang masuk
+        reports.sort((a, b) => new Date(b.date) - new Date(a.date));
+      }
+    }
+
     res.status(200).json(reports.map(report => report.toJSON()));
+
   } catch (error) {
-    console.error('Kesalahan saat mengambil laporan penjualan harian outlet:', error);
-    res.status(500).json({ message: 'Kesalahan server saat mengambil laporan penjualan harian outlet.', error: error.message });
+    console.error('Kesalahan saat mengambil laporan penjualan harian:', error);
+    res.status(500).json({ message: 'Kesalahan server.', error: error.message });
   }
 };

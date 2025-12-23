@@ -35,7 +35,9 @@ const validateUserReference = async (userId, errorsArray, fieldName, requiredRol
  * @returns {Promise<{ saleData: object|null, errors: string[] }>} An object containing the prepared sale data and any validation errors.
  */
 export const processNewSaleData = async (rawSaleData, reqUser, paymentEvidenceUrl) => {
-    const { outletId, itemSingle, itemBundle, itemPromo, totalPaid: rawTotalPaid, payment } = rawSaleData;
+    // [UPDATE] Tambahkan itemAddon di sini
+    const { outletId, itemSingle, itemBundle, itemPromo, itemAddon, totalPaid: rawTotalPaid, payment } = rawSaleData;
+    
     const errors = [];
     let calculatedTotalPrice = 0;
     const ingredientsConsumedMap = new Map(); // To aggregate ingredient usage (ingredientId -> {qty, expense, name, unit})
@@ -242,6 +244,36 @@ export const processNewSaleData = async (rawSaleData, reqUser, paymentEvidenceUr
       }
     }
 
+    // --- [BARU] Process itemAddon (Standalone) and calculate ingredients used ---
+    const processedItemAddon = [];
+    if (itemAddon && Array.isArray(itemAddon)) {
+      for (const addonItem of itemAddon) {
+        if (!addonItem.addonId || !mongoose.Types.ObjectId.isValid(addonItem.addonId) || addonItem.qty === undefined || addonItem.qty < 1) {
+          errors.push('Item addon (standalone) memiliki format ID addon atau jumlah yang tidak valid.');
+          continue;
+        }
+        const addon = await Addon.findById(addonItem.addonId);
+        if (!addon || addon.isDeleted || !addon.isActive) {
+          errors.push(`Addon ID '${addonItem.addonId}' (standalone) tidak ditemukan, sudah dihapus, atau tidak aktif.`);
+          continue;
+        }
+
+        processedItemAddon.push({
+          addonId: addon._id,
+          name: addon.name,
+          qty: addonItem.qty,
+          price: addon.price, // Harga saat transaksi
+        });
+        
+        // Tambahkan ke total harga
+        calculatedTotalPrice += addonItem.qty * addon.price;
+
+        // PENTING: Hitung pengurangan stok dari Resep Addon
+        await addIngredientsToMap(addon.recipe, addonItem.qty);
+      }
+    }
+
+
     // --- Validate Payment ---
     if (!payment || !payment.method || !Object.values(PaymentMethods).includes(payment.method)) {
       errors.push('Metode pembayaran tidak valid.');
@@ -253,7 +285,7 @@ export const processNewSaleData = async (rawSaleData, reqUser, paymentEvidenceUr
     // Update payment object with evidenceUrl
     payment.evidenceUrl = paymentEvidenceUrl;
 
-    // --- Validate totalPaid ---
+    // --- Validate totalPaid ---\
     if (typeof totalPaid === 'string') {
         const parsedTotalPaid = parseFloat(totalPaid);
         if (isNaN(parsedTotalPaid)) {
@@ -284,6 +316,7 @@ export const processNewSaleData = async (rawSaleData, reqUser, paymentEvidenceUr
       itemSingle: processedItemSingle,
       itemBundle: processedItemBundle,
       itemPromo: processedItemPromo,
+      itemAddon: processedItemAddon, // [BARU] Masukkan ke objek final
       totalPrice: calculatedTotalPrice,
       totalPaid: totalPaid,
       payment: payment,

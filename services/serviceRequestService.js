@@ -10,13 +10,16 @@ import { OrderStatuses } from '../constants/orderStatuses.js';
 import { SourceTypes } from '../constants/sourceTypes.js';
 import * as outletInventoryService from './outletInventoryService.js';
 import { revertDailySaleReport } from './dailySaleReportService.js';
+// [BARU] Import service notifikasi
+import { createAdminNotification } from './adminNotificationService.js';
 
 export const createServiceRequest = async (data, userContext) => {
     const { outletId, type, targetId, reason } = data;
     const errors = [];
 
     if (!mongoose.Types.ObjectId.isValid(outletId)) errors.push('ID Outlet tidak valid.');
-    const outlet = await Outlet.findById(outletId);
+    // Kita butuh object outlet lengkap untuk nama di notifikasi
+    const outlet = await Outlet.findById(outletId); 
     if (!outlet) errors.push('Outlet tidak ditemukan.');
     if (!Object.values(RequestTypes).includes(type)) errors.push('Tipe request tidak valid.');
     if (!mongoose.Types.ObjectId.isValid(targetId)) errors.push('Target ID tidak valid.');
@@ -49,10 +52,29 @@ export const createServiceRequest = async (data, userContext) => {
     if (existingRequest) return { success: false, message: 'Sudah ada permintaan yang sedang diproses.' };
 
     try {
+        // 1. Buat Request di Database
         const newRequest = await ServiceRequest.create({
             outlet: outletId, requestedBy: userContext.userId, type, targetId, reason,
             status: RequestStatuses.PENDING, isCompleted: false, targetCode: targetCode
         });
+
+        // 2. [BARU] Buat Notifikasi Admin Otomatis
+        // Kita gunakan try-catch terpisah agar jika notifikasi gagal, request utama tetap sukses
+        try {
+            const readableType = type === RequestTypes.DELETE_SALE ? 'Penjualan' : 'Order Bahan';
+            
+            await createAdminNotification({
+                type: 'REQUEST', // Sesuai enum di AdminNotification Model
+                title: `Permintaan Hapus ${readableType}`,
+                content: `Outlet ${outlet.name} meminta penghapusan ${readableType} (${targetCode}). Alasan: ${reason}`,
+                outletId: outlet._id,
+                targetId: newRequest._id // ID Request agar admin bisa klik detail
+            });
+        } catch (notifError) {
+            console.error("Gagal membuat notifikasi admin:", notifError);
+            // Tidak kita throw error agar return utama tetap sukses
+        }
+
         return { success: true, data: newRequest };
     } catch (error) {
         console.error('Error creating service request:', error);
