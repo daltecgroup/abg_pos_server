@@ -28,6 +28,7 @@ import DailyOutletSaleReport from './models/DailyOutletSaleReport.js'; // NEW: I
 import userOutletRoutes from './routes/userOutletRoutes.js';
 import serviceRequestRoutes from './routes/serviceRequestRoutes.js';
 import adminNotificationRoutes from './routes/adminNotificationRoutes.js';
+import dashboardRoutes from './routes/dashboardRoutes.js';
 
 const app = express();
 const server = http.createServer(app);
@@ -81,6 +82,7 @@ app.use('/api/v1/dailyoutletsalereports', dailySaleReportRoutes);
 app.use('/api/v1/useroutlets', userOutletRoutes);
 app.use('/api/v1/servicerequests', serviceRequestRoutes);
 app.use('/api/v1/admin-notifications', adminNotificationRoutes);
+app.use('/api/v1/dashboard', dashboardRoutes);
 
 // Basic route for testing server status
 app.get('/api/v1', (req, res) => {
